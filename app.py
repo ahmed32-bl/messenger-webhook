@@ -4,8 +4,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # استبدل هذا بالتوكن الخاص بالصفحة
-PAGE_ACCESS_TOKEN = "EAANEgEzn4hwBOzNi01UUGA7qY8Bib9EVTy2WuRZCKkAphw9e1yMHetFOu2wLUI5LWIUF0yEjXZCxuuK7ZAyYr1uxVJI0U5p3xEqyKy4Va6oN4wRZCkZAvZCounW0ACVIfW6eGBMXjv3Ch42sVkFZAbiS3YqBDcPhFB3uQq59luGfPlDpk1dZC4tJaPeH63kiCTD3WnUPcwZCxb2TuN9FO8QZDZD
-
+PAGE_ACCESS_TOKEN = "EAANEgEzn4hwBOzNi01UUGA7qY8Bib9EVTy2WuRZCKkAphw9e1yMHetFOu2wLUI5LWIUF0yEjXZCxuuK7ZAyYr1uxVJI0U5p3xEqyKy4Va6oN4wRZCkZAvZCounW0ACVIfW6eGBMXjv3Ch42sVkFZAbiS3YqBDcPhFB3uQq59luGfPlDpk1dZC4tJaPeH63kiCTD3WnUPcwZCxb2TuN9FO8QZDZD"
 VERIFY_TOKEN = "workshop_chatbot_123"
 
 @app.route("/", methods=["GET"])
