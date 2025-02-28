@@ -21,7 +21,7 @@ def chat_with_gpt(message):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4",
         "messages": [{"role": "user", "content": message}]
     }
     
