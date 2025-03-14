@@ -2,19 +2,26 @@ import os
 import requests
 from flask import Flask, request, jsonify
 import openai
+from dotenv import load_dotenv  # 📌 Importer dotenv
 
-# 📌 تهيئة التطبيق Flask
-# هذا التطبيق يعمل كـ webhook للتفاعل مع Messenger
+# 🔹 Charger les variables depuis le fichier .env
+load_dotenv()
+
+# 🔹 Initialisation Flask
 app = Flask(__name__)
 
-# 📌 مفاتيح API والإعدادات
-VERIFY_TOKEN = "workshop_chatbot_123"  # رمز التحقق من ال webhook مع Messenger
-PAGE_ACCESS_TOKEN = "PAGE_ACCESS_TOKEN"  # مفتاح API لإرسال الرسائل عبر Messenger
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # مفتاح API لـ GPT-4
-AIRTABLE_API_KEY = "AIRTABLE_API"  # مفتاح API لـ Airtable
-AIRTABLE_BASE_ID = "AIRTABLE_BASE_ID"
-TABLE_PRODUITS = "Produits"  # اسم جدول المنتجات
-TABLE_COMMANDES = "Commandes"  # اسم جدول الطلبات
-TABLE_CLIENTS = "Clients"  # اسم جدول العملاء
-TABLE_FAQ = "FAQ"  # جدول الأسئلة الشائعة
-ADMIN_ID = "503020996238881"  # معرف المسؤول لاستلام الإشعارات
+# 🔹 Chargement des variables API depuis .env
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+
+# 🔹 Noms des tables Airtable
+TABLE_PRODUITS = os.getenv("TABLE_PRODUITS")
+TABLE_COMMANDES = os.getenv("TABLE_COMMANDES")
+TABLE_CLIENTS = os.getenv("TABLE_CLIENTS")
+TABLE_FAQ = os.getenv("TABLE_FAQ")
+
+# 🔹 ID Admin
+ADMIN_ID = os.getenv("ADMIN_ID")
