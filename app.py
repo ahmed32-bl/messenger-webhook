@@ -1,81 +1,56 @@
 import os
 import requests
 from flask import Flask, request, jsonify
+import openai
 
+# 📌 تهيئة التطبيق Flask
+# هذا التطبيق يعمل كـ webhook للتفاعل مع Messenger
 app = Flask(__name__)
 
-# التوكن للتحقق من فيسبوك
-VERIFY_TOKEN = "workshop_chatbot_123"  # تأكد من أنه نفس التوكن في إعدادات فيسبوك
+# 📌 مفاتيح API والإعدادات
+VERIFY_TOKEN = "workshop_chatbot_123"  # رمز التحقق من ال webhook مع Messenger
+PAGE_ACCESS_TOKEN = "PAGE_ACCESS_TOKEN"  # مفتاح API لإرسال الرسائل عبر Messenger
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # مفتاح API لـ GPT-4
+AIRTABLE_API_KEY = "AIRTABLE_API"  # مفتاح API لـ Airtable
+AIRTABLE_BASE_ID = "AIRTABLE_BASE_ID"
+TABLE_PRODUITS = "Produits"  # اسم جدول المنتجات
+TABLE_COMMANDES = "Commandes"  # اسم جدول الطلبات
+TABLE_CLIENTS = "Clients"  # اسم جدول العملاء
+TABLE_FAQ = "FAQ"  # جدول الأسئلة الشائعة
+ADMIN_ID = "503020996238881"  # معرف المسؤول لاستلام الإشعارات
 
-# توكن الوصول إلى صفحة ماسنجر
-PAGE_ACCESS_TOKEN = "EAANEgEzn4hwBOwxeBNDM0YR3SB952FCzpSsOurktbYtAbAI6beIwrK8WhZCtgYDP1HNJmOGD97zqV6NAlxucnZABI7C58PqNERdZArL6O4P0NYHYhuwZAPQX8vvCyhQKQTUTyeBYI4tymgkxwz6Xw9HDeibYBMUSdeR4rREcr9fBT3ZAbrujogdIvFBBJXnKJJbryoREMrHeOZAGJ8zQZDZD"  
-
-# API Key الخاصة بـ OpenAI
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-def chat_with_gpt(message):
-    """إرسال الرسائل إلى ChatGPT والرد على المستخدم"""
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "gpt-4",
-        "messages": [{"role": "user", "content": message}]
-    }
-    
-    response = requests.post(url, headers=headers, json=payload)
-    response_data = response.json()
-
-    if "choices" in response_data:
-        return response_data["choices"][0]["message"]["content"]
-    else:
-        return "❌ حدث خطأ في الاتصال بـ ChatGPT."
-
-@app.route("/", methods=["GET"])
-def home():
-    return "Messenger Webhook is running!"
-
+# 🔹 التحقق من Webhook Messenger
 @app.route("/webhook", methods=["GET"])
 def verify():
-    """ التحقق من Webhook في فيسبوك"""
+    """ التحقق من صحة تكوين ال webhook مع Messenger """
     token_sent = request.args.get("hub.verify_token")
     if token_sent == VERIFY_TOKEN:
         return request.args.get("hub.challenge")
-    return "Invalid verification token", 403
+    return "رمز التحقق غير صحيح", 403
 
+# 🔹 استقبال الرسائل والرد التلقائي
 @app.route("/webhook", methods=["POST"])
 def receive_message():
-    """استقبال الرسائل من ماسنجر والرد باستخدام ChatGPT"""
-    data = request.get_json()
-    print("📩 Received:", data)
+    """ استقبال رسائل العملاء من Messenger وإرسال الردود عبر الروبوت """
+    data = request.json
+    if data["object"] == "page":
+        for entry in data["entry"]:
+            for messaging_event in entry["messaging"]:
+                sender_id = messaging_event["sender"]["id"]
+                if "message" in messaging_event:
+                    message_text = messaging_event["message"]["text"]
+                    response_text = chat_with_gpt(message_text, sender_id)
+                    send_message_messenger(sender_id, response_text)
+    return "ok", 200
 
-    if "entry" in data and len(data["entry"]) > 0:
-        messaging = data["entry"][0].get("messaging", [])
-        for event in messaging:
-            if "message" in event:
-                sender_id = event["sender"]["id"]
-                message_text = event["message"].get("text", "")
+# 🔹 إدارة المحادثات والمبيعات
 
-                # إرسال النص إلى ChatGPT والحصول على الرد
-                bot_response = chat_with_gpt(message_text)
-                send_message(sender_id, bot_response)
-
-    return "Message processed", 200
-
-def send_message(recipient_id, text):
-    """إرسال رسالة إلى المستخدم على ماسنجر"""
-    url = f"https://graph.facebook.com/v18.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {"text": text}
-    }
-    
+def chat_with_gpt(message, user_id):
+    """ إدارة محادثة المستخدم والمبيعات """
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    prompt = f"انت مساعد بيع محترف، لازم تجاوب بالدارجة الجزائرية وتساعد العميل: {message}"
+    payload = {"model": "gpt-4", "messages": [{"role": "system", "content": prompt}]}
     response = requests.post(url, headers=headers, json=payload)
-    print("📤 Sent:", text, "Status:", response.status_code)
-    return response.json()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000, debug=True)
+    response_data = response.json()
+    return response_data["choices"][0]["message"]["content"] if "choices" in response_data else "⛔ خطأ في الرد."
