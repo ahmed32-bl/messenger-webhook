@@ -60,7 +60,7 @@ def receive_message():
                         message_text=message_text,
                         previous_messages=previous_messages,
                         summary=summary,
-                        model_name="gpt-3.5-turbo"  # يمكن تغييره لاحقًا إلى gpt-4
+                        model_name="gpt-4"  # يمكن تغييره لاحقًا إلى gpt-4
                     )
 
                     # إرسال الرد للمستخدم
