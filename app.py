@@ -54,13 +54,12 @@ def receive_message():
                     previous_messages = get_previous_messages(sender_id)
                     summary = get_summary(sender_id)
 
-                    # توليد الرد بواسطة OpenAI
-                    # مبدئيًا نضعه على gpt-3.5-turbo للتأكد من أن المفتاح يعمل
+                    # توليد الرد بواسطة OpenAI (افتراضي gpt-3.5-turbo)
                     response_text = process_message(
-                        sender_id,
-                        message_text,
-                        previous_messages,
-                        summary,
+                        user_id=sender_id,
+                        message_text=message_text,
+                        previous_messages=previous_messages,
+                        summary=summary,
                         model_name="gpt-3.5-turbo"  # يمكن تغييره لاحقًا إلى gpt-4
                     )
 
@@ -85,13 +84,15 @@ def get_previous_messages(user_id):
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
         records = response.json().get("records", [])
-        messages = []
+        messages_list = []
         for record in records:
             fields = record.get("fields", {})
             if fields.get("user_id") == user_id:
-                messages.append(fields["message"])
-        # استرجاع آخر 5 رسائل فقط
-        return messages[-5:]
+                # تأكّد من وجود 'message'
+                msg_text = fields.get("message")
+                if msg_text is not None:
+                    messages_list.append(msg_text)
+        return messages_list[-5:]  # آخر 5 رسائل فقط
     return []
 
 ########################################
@@ -128,12 +129,14 @@ def get_all_messages(user_id):
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
         records = response.json().get("records", [])
-        messages = []
+        messages_list = []
         for record in records:
             fields = record.get("fields", {})
             if fields.get("user_id") == user_id:
-                messages.append(fields["message"])
-        return messages
+                msg_text = fields.get("message")
+                if msg_text is not None:
+                    messages_list.append(msg_text)
+        return messages_list
     return []
 
 ########################################
@@ -158,7 +161,7 @@ def summarize_conversation(messages):
     )
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo", # يمكن تغييره إلى gpt-4
+            model="gpt-3.5-turbo",  # يمكن تغييره إلى gpt-4
             messages=[{"role": "user", "content": summary_prompt}]
         )
         return response["choices"][0]["message"]["content"].strip()
@@ -186,7 +189,8 @@ def process_message(user_id, message_text, previous_messages, summary, model_nam
         )
         return response["choices"][0]["message"].get("content", "").strip()
     except Exception as e:
-        print("OpenAI Error:", e)  # طباعة الخطأ في اللوقز لمعرفة السبب
+        print("OpenAI Error:", e)
+        print("=================== ERROR STACK TRACE ===================")
         return "عذرًا، حدث خطأ. حاول مرة أخرى لاحقًا."
 
 ########################################
@@ -219,4 +223,3 @@ def send_message(recipient_id, message_text):
 ########################################
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-
