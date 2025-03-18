@@ -4,7 +4,7 @@ from flask import Flask, request, jsonify
 import openai
 from dotenv import load_dotenv
 
-# تحميل المتغيرات من ملف .env (في حال كان موجودًا)
+# إذا كنت لا تستخدم .env محليًا، يمكنك إزالة السطرين التاليين:
 load_dotenv()
 
 app = Flask(__name__)
@@ -18,7 +18,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 
-# اسم الجداول
+# اسم الجداول في Airtable
 TABLE_MESSAGES = "Messages"
 TABLE_SUMMARIES = "Summaries"
 
@@ -27,7 +27,9 @@ TABLE_SUMMARIES = "Summaries"
 # =============================
 openai.api_key = OPENAI_API_KEY
 
+########################################
 # نقطة النهاية للتحقق من Webhook
+########################################
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     token_sent = request.args.get("hub.verify_token")
@@ -35,7 +37,9 @@ def verify_webhook():
         return request.args.get("hub.challenge")
     return "Unauthorized", 403
 
+########################################
 # استقبال الرسائل من ماسنجر
+########################################
 @app.route("/webhook", methods=["POST"])
 def receive_message():
     data = request.get_json()
@@ -50,9 +54,14 @@ def receive_message():
                     previous_messages = get_previous_messages(sender_id)
                     summary = get_summary(sender_id)
 
-                    # توليد الرد بواسطة GPT-4
+                    # توليد الرد بواسطة OpenAI
+                    # مبدئيًا نضعه على gpt-3.5-turbo للتأكد من أن المفتاح يعمل
                     response_text = process_message(
-                        sender_id, message_text, previous_messages, summary
+                        sender_id,
+                        message_text,
+                        previous_messages,
+                        summary,
+                        model_name="gpt-3.5-turbo"  # يمكن تغييره لاحقًا إلى gpt-4
                     )
 
                     # إرسال الرد للمستخدم
@@ -67,7 +76,9 @@ def receive_message():
                     update_summary(sender_id)
     return "OK", 200
 
+########################################
 # استرجاع المحادثات السابقة من Airtable
+########################################
 def get_previous_messages(user_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_MESSAGES}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -83,7 +94,9 @@ def get_previous_messages(user_id):
         return messages[-5:]
     return []
 
+########################################
 # استرجاع الملخص من Airtable
+########################################
 def get_summary(user_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_SUMMARIES}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -96,15 +109,19 @@ def get_summary(user_id):
                 return fields.get("summary", "")
     return ""
 
+########################################
 # تحديث الملخص في Airtable
+########################################
 def update_summary(user_id):
-    # جلب آخر 10 رسائل مثلًا
+    # جلب جميع رسائل المستخدم
     all_messages = get_all_messages(user_id)
     if len(all_messages) >= 10:
         summary_text = summarize_conversation(all_messages)
         post_summary(user_id, summary_text)
 
+########################################
 # جلب جميع الرسائل للمستخدم
+########################################
 def get_all_messages(user_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_MESSAGES}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -119,7 +136,9 @@ def get_all_messages(user_id):
         return messages
     return []
 
+########################################
 # إرسال الملخص إلى Airtable
+########################################
 def post_summary(user_id, summary_text):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_SUMMARIES}"
     headers = {
@@ -129,7 +148,9 @@ def post_summary(user_id, summary_text):
     data = {"fields": {"user_id": user_id, "summary": summary_text}}
     requests.post(url, headers=headers, json=data)
 
+########################################
 # تلخيص المحادثة
+########################################
 def summarize_conversation(messages):
     summary_prompt = (
         "لخص المحادثة التالية بإيجاز دون فقدان المعلومات المهمة:\n"
@@ -137,15 +158,18 @@ def summarize_conversation(messages):
     )
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-4",
+            model="gpt-3.5-turbo", # يمكن تغييره إلى gpt-4
             messages=[{"role": "user", "content": summary_prompt}]
         )
         return response["choices"][0]["message"]["content"].strip()
     except Exception as e:
+        print("Summary Error:", e)
         return ""
 
+########################################
 # معالجة الرسائل باستخدام OpenAI
-def process_message(user_id, message_text, previous_messages, summary):
+########################################
+def process_message(user_id, message_text, previous_messages, summary, model_name="gpt-3.5-turbo"):
     try:
         messages = [
             {"role": "system", "content": "تذكر هذه المحادثة مع المستخدم"}
@@ -157,14 +181,17 @@ def process_message(user_id, message_text, previous_messages, summary):
         messages.append({"role": "user", "content": message_text})
 
         response = openai.ChatCompletion.create(
-            model="gpt-4",
+            model=model_name,
             messages=messages
         )
-        return response["choices"][0]["message"]["content"].strip()
+        return response["choices"][0]["message"].get("content", "").strip()
     except Exception as e:
+        print("OpenAI Error:", e)  # طباعة الخطأ في اللوقز لمعرفة السبب
         return "عذرًا، حدث خطأ. حاول مرة أخرى لاحقًا."
 
+########################################
 # حفظ الرسالة في Airtable
+########################################
 def save_message(user_id, message_text, sender):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_MESSAGES}"
     headers = {
@@ -174,7 +201,9 @@ def save_message(user_id, message_text, sender):
     data = {"fields": {"user_id": user_id, "message": message_text, "sender": sender}}
     requests.post(url, headers=headers, json=data)
 
+########################################
 # إرسال رسالة إلى ماسنجر
+########################################
 def send_message(recipient_id, message_text):
     url = "https://graph.facebook.com/v13.0/me/messages"
     headers = {"Content-Type": "application/json"}
@@ -185,5 +214,9 @@ def send_message(recipient_id, message_text):
     }
     requests.post(url, headers=headers, params=params, json=payload)
 
+########################################
+# نقطة البداية
+########################################
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
