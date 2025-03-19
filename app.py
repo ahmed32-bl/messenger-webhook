@@ -13,6 +13,9 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 
+# تحديث عنوان DeepSeek API الصحيح
+deepseek_url = "https://api.deepseek.com/v1/query"  # استبدل بعنوان DeepSeek الحقيقي
+
 # إنشاء تطبيق Flask
 app = Flask(__name__)
 
@@ -39,13 +42,12 @@ def handle_message():
         logging.info(f"📩 استقبال رسالة من {sender_id}: {message_text}")
 
         # إرسال الرسالة إلى DeepSeek وتحليل الرد
-        deepseek_url = "https://deepseek.api.url"  # استبدل بعنوان DeepSeek الحقيقي
         headers = {
             "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
             "Content-Type": "application/json"
         }
         payload = {
-            "message": message_text,
+            "query": message_text,
             "context": {"user_id": sender_id}
         }
 
