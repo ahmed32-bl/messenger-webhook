@@ -53,6 +53,7 @@ def handle_message():
 
         response = requests.post(deepseek_url, json=payload, headers=headers)
         response_data = response.json()
+        print("DeepSeek Response:", response_data)  # ✅ طباعة الاستجابة لرؤية المحتوى الحقيقي
         bot_response = response_data.get("response", "عذرًا، ما قدرت نجاوبك.")
 
         # إرسال الرد إلى العميل
