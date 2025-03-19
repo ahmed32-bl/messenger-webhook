@@ -3,4 +3,5 @@ gunicorn
 requests
 pyairtable
 python-dotenv
-
+deepseek
+openai
