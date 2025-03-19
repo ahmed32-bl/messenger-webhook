@@ -5,27 +5,33 @@ from flask import Flask, request, jsonify
 import openai
 from dotenv import load_dotenv
 
+# تحميل متغيرات البيئة
 load_dotenv()
 
 app = Flask(__name__)
 
+# =============================
 # متغيرات البيئة
-AIRTABLE_API_KEY   = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID   = os.getenv("AIRTABLE_BASE_ID")
-OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY")
-PAGE_ACCESS_TOKEN  = os.getenv("PAGE_ACCESS_TOKEN")
-VERIFY_TOKEN       = os.getenv("VERIFY_TOKEN")
+# =============================
+AIRTABLE_API_KEY  = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID  = os.getenv("AIRTABLE_BASE_ID")
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+VERIFY_TOKEN      = os.getenv("VERIFY_TOKEN")
 
-# جداول Airtable
-TABLE_MESSAGES     = "Messages"
-TABLE_SUMMARIES    = "Summaries"
-TABLE_PRODUCTS     = "Products"
-TABLE_ORDERS       = "Orders"
+# =============================
+# أسماء الجداول في Airtable
+# =============================
+TABLE_MESSAGES  = "Messages"
+TABLE_SUMMARIES = "Summaries"
+TABLE_PRODUCTS  = "Products"
+TABLE_ORDERS    = "Orders"
 
+# تهيئة OpenAI
 openai.api_key = OPENAI_API_KEY
 
 ########################################
-# Webhook Verification
+# التحقق من Webhook فيسبوك
 ########################################
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
@@ -33,7 +39,6 @@ def verify_webhook():
     if token_sent == VERIFY_TOKEN:
         return request.args.get("hub.challenge")
     return "Unauthorized", 403
-
 
 ########################################
 # استقبال الرسائل من ماسنجر
@@ -46,44 +51,53 @@ def receive_message():
             for message_event in entry.get("messaging", []):
                 sender_id = message_event.get("sender", {}).get("id", "")
                 if message_event.get("message"):
-                    user_message_text = message_event["message"].get("text", "")
+                    user_message = message_event["message"].get("text", "")
 
-                    # 1) جلب الرسائل السابقة والملخص
-                    previous_msgs = get_previous_messages(sender_id)
-                    summary = get_summary(sender_id)
+                    # 1) جلب آخر رسائل + ملخص
+                    prev_msgs = get_previous_messages(sender_id)
+                    conversation_summary = get_summary(sender_id)
 
-                    # 2) جلب قائمة المنتجات الفعلية من Airtable
-                    product_list = fetch_products()  # سيعيد لائحة من المنتجات
+                    # 2) جلب قائمة المنتجات
+                    products_list = fetch_products()
 
-                    # 3) تعامل مع الرسالة
-                    bot_response = handle_user_message(
+                    # 3) تحليل الرسالة وإنتاج الرد
+                    bot_reply = handle_user_message(
                         user_id=sender_id,
-                        user_text=user_message_text,
-                        previous_messages=previous_msgs,
-                        summary=summary,
-                        product_list=product_list
+                        user_text=user_message,
+                        previous_messages=prev_msgs,
+                        summary=conversation_summary,
+                        product_list=products_list
                     )
 
                     # 4) إرسال الرد
-                    send_text_message(sender_id, bot_response)
+                    send_text_message(sender_id, bot_reply)
 
-                    # 5) حفظ المحادثة
-                    save_message(sender_id, user_message_text, "user")
-                    save_message(sender_id, bot_response, "bot")
+                    # 5) حفظ الرسائل
+                    save_message(sender_id, user_message, "user")
+                    save_message(sender_id, bot_reply, "bot")
 
                     # 6) تحديث الملخص
                     update_summary(sender_id)
 
     return "OK", 200
 
+
 ########################################
-# جلب كل المنتجات من Airtable
+# 1) جلب قائمة المنتجات من Airtable
 ########################################
 def fetch_products():
     """
     يعيد قائمة من القواميس:
     [
-      {"product_code": "PROD001", "product_name": "قميص نور الأبيض", "price": 2500, "stock": 5, "image_url": "...", "color": "أبيض", "size": "M, L, XL"},
+      {
+        'product_code': 'PROD001',
+        'product_name': 'قميص نور الأبيض',
+        'price': 2500,
+        'stock': 5,
+        'image_url': '...',
+        'color': 'أبيض',
+        'size': 'M, L, XL'
+      },
       ...
     ]
     """
@@ -94,53 +108,48 @@ def fetch_products():
     if resp.status_code == 200:
         records = resp.json().get("records", [])
         for r in records:
-            fields = r.get("fields", {})
+            flds = r.get("fields", {})
             product_list.append({
-                "product_code": fields.get("product_code", ""),
-                "product_name": fields.get("product_name", ""),
-                "price": fields.get("price", 0),
-                "stock": fields.get("stock", 0),
-                "image_url": fields.get("image_url", ""),
-                "color": fields.get("color", ""),
-                "size": fields.get("size", "")
+                "product_code": flds.get("product_code", ""),
+                "product_name": flds.get("product_name", ""),
+                "price": flds.get("price", 0),
+                "stock": flds.get("stock", 0),
+                "image_url": flds.get("image_url", ""),
+                "color": flds.get("color", ""),
+                "size": flds.get("size", "")
             })
     return product_list
 
 
 ########################################
-# الدالة الرئيسية: استخدام برومبت شامل لـ GPT-4
+# 2) الدالة الرئيسية (برومبت شامل لـ GPT-4)
 ########################################
 def handle_user_message(user_id, user_text, previous_messages, summary, product_list):
     """
-    نضع برومبت يحتوي على:
-     - التعليمات الأساسية للهجة الجزائرية
-     - قائمة المنتجات المتوفرة (حتى يلتزم GPT بها)
-     - ملخص المحادثة السابقة
-     - آخر 5 رسائل
-     - رسالة العميل الحالية
-
-    نطلب منه إخراج JSON يتضمن:
-     intent, product_code, quantity, message_for_user, confirm_purchase
-
-    ثم ننفذ الأمر ونجيب العميل.
+    - نرسل لـ GPT-4 التعليمات الأساسية + قائمة المنتجات.
+    - نطلب منه رد بشكل JSON: {intent, product_code, quantity, message_for_user, confirm_purchase}.
+    - نتخذ القرار بناءً على الناتج.
     """
-    # نحول قائمة المنتجات لJSON
     products_json = json.dumps(product_list, ensure_ascii=False)
 
     system_prompt = f"""
-أنت مساعد شخصي تلقائي (شات بوت) لمتجر إلكتروني يبيع "قمصان النور الإندونيسية" في الجزائر.
-
-- تتكلم باللهجة الجزائرية شبه الرسمية، دون إيموجي.
-- هذه هي المنتجات المتوفرة فقط (لا تقترح شيئًا خارجها):
+أنت مساعد شخصي تلقائي (شات بوت) لمتجر إلكتروني يبيع قمصان النور الإندونيسية في الجزائر.
+- تتحدث باللهجة الجزائرية شبه الرسمية دون إيموجي.
+- هذه قائمة المنتجات المتوفرة فقط (لا تقترح أي شيء خارجها):
 {products_json}
 
-- إذا سأل العميل عن منتج، ابحث عن كوده (product_code) وطابقه مع القائمة أعلاه.
-- لا تقدم منتج خارج هذه القائمة.
-- إذا أراد الشراء، اطلب منه التأكيد قبل تسجيل الطلب (confirm_purchase=true).
-- عند ذكر color أو size، تأكد أنها ضمن معلومات المنتج إن وجدت.
-- إذا السؤال خارج نطاق الأقمصة أو البيع، اعتذر بلباقة.
+- إذا أراد العميل شراء منتج، اطلب منه تأكيد الشراء (confirm_purchase = true) قبل إتمام الطلب.
+- إذا كان خارج نطاق البيع، اعتذر بلباقة.
+- رجاءً أعد الرد بصيغة JSON حصراً:
+{{
+  \"intent\": \"...\",
+  \"product_code\": \"...\",
+  \"quantity\": 1,
+  \"message_for_user\": \"...\", 
+  \"confirm_purchase\": false
+}}
 
-السياق السابق (آخر 5 رسائل):
+سياق المحادثة السابقة (آخر 5 رسائل):
 {previous_messages}
 
 ملخص سابق:
@@ -148,22 +157,7 @@ def handle_user_message(user_id, user_text, previous_messages, summary, product_
 
 رسالة العميل الحالية:
 {user_text}
-
-أريد ردك في صيغة JSON حصراً، هكذا:
-{{
-  "intent": "...", 
-  "product_code": "...", 
-  "quantity": 1,
-  "message_for_user": "نص مختصر للرد",
-  "confirm_purchase": false
-}}
-حيث:
-- intent يمكن أن يكون: "ask_product_info", "buy_product", "out_of_scope", "general"
-- product_code يكون أحد الأكواد في القائمة، أو "" لو مافيه
-- quantity رقم
-- message_for_user رد موجز باللهجة الجزائرية.
-- confirm_purchase = true إذا كنت جاهز لتأكيد الطلب
-    """
+"""
 
     try:
         response = openai.ChatCompletion.create(
@@ -171,11 +165,12 @@ def handle_user_message(user_id, user_text, previous_messages, summary, product_
             temperature=0.2,  # تقليل العشوائية
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "حلل الطلب وأعطني النتيجة في JSON فقط"}
+                {"role": "user", "content": "حلل الرسالة وأعطني JSON فقط."}
             ]
         )
         content = response["choices"][0]["message"].get("content", "").strip()
-        # محاولة parse JSON
+
+        # محاولة تفكيك JSON
         try:
             parsed = json.loads(content)
         except:
@@ -189,96 +184,93 @@ def handle_user_message(user_id, user_text, previous_messages, summary, product_
         confirm = parsed.get("confirm_purchase", False)
         user_msg = parsed.get("message_for_user", "ما فهمتش قصدك.")
 
-        # تنفيذ المنطق بناء على intent
+        # لو nية: معلومات منتج
         if intent == "ask_product_info" and pcode:
-            # ابحث عن المنتج في Airtable
-            product_info = find_product_in_list(product_list, pcode)
+            product_info = find_in_list(product_list, pcode)
             if product_info:
-                # عرض المعلومات
-                return f"{user_msg}\n(مخزون: {product_info['stock']}، سعر: {product_info['price']} دج)"
+                return f"{user_msg}\n(مخزون: {product_info['stock']}, سعر: {product_info['price']} دج)"
             else:
-                return f"{user_msg}\n(عذراً ما لقينا هذا المنتج.)"
+                return f"{user_msg}\n(ما لقيتش المنتج المطلوب.)"
 
+        # لو nية: شراء منتج
         elif intent == "buy_product" and pcode:
-            # هل هذا تأكيد؟
             if confirm:
-                # نتمم الطلب
-                product_info = find_product_in_list(product_list, pcode)
+                # تأكيد الشراء، نسجل الطلب وننقص المخزون
+                product_info = find_in_list(product_list, pcode)
                 if product_info and product_info["stock"] >= qty:
-                    # إنقاص المخزون
-                    old_stock = product_info["stock"]
-                    new_stock = old_stock - qty
-                    # تحديثه في Airtable
-                    p_rec_id = get_product_record_id(pcode)
-                    if p_rec_id:
-                        update_product_stock(p_rec_id, new_stock)
+                    # تحديث المخزون في Airtable
+                    record_id = get_product_record_id(pcode)
+                    if record_id:
+                        new_stock = product_info["stock"] - qty
+                        update_product_stock(record_id, new_stock)
                         create_order(user_id, pcode, qty)
-                        return f"{user_msg}\n(تم تسجيل طلبك: {product_info['product_name']} بعدد {qty} بنجاح.)"
+                        return f"{user_msg}\n(تم تسجيل طلبك لمنتج {product_info['product_name']} بعدد {qty}.)"
                     else:
-                        return f"{user_msg}\n(تعذر إتمام الطلب. لم أجد سجل المنتج.)"
+                        return f"{user_msg}\n(تعذر إتمام الطلب، لم أجد سجل المنتج.)"
                 else:
-                    return f"{user_msg}\n(المنتج غير متوفر أو المخزون لا يكفي.)"
+                    return f"{user_msg}\n(المخزون ما يكفي أو المنتج غير موجود.)"
             else:
-                # لازال ناقص التأكيد
+                # لسه مافي تأكيد
                 return user_msg
 
+        # لو خارج النطاق
         elif intent == "out_of_scope":
             return user_msg
 
         else:
-            # general أو لا نعرف
+            # general intent أو ما فهمناش
             return user_msg
 
     except Exception as e:
         print("GPT-4 Error:", e)
-        return "عذراً، صار خطأ تقني. أعد المحاولة لاحقاً."
+        return "عذرًا، صار خطأ تقني. أعد المحاولة لاحقاً."
 
 
 ########################################
-# وظيفة بسيطة للبحث في القائمة
+# بحث عن المنتج في القائمة
 ########################################
-def find_product_in_list(product_list, product_code):
-    for pr in product_list:
-        if pr["product_code"] == product_code:
-            return pr
+def find_in_list(product_list, product_code):
+    for prod in product_list:
+        if prod["product_code"] == product_code:
+            return prod
     return None
 
+
 ########################################
-# جلب record_id للمنتج من Airtable لتحديث المخزون
+# جلب record_id للمنتج من Airtable
 ########################################
 def get_product_record_id(product_code):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_PRODUCTS}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    resp = requests.get(url, headers=headers)
+    hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    resp = requests.get(url, headers=hh)
     if resp.status_code == 200:
         recs = resp.json().get("records", [])
         for r in recs:
-            flds = r.get("fields", {})
-            if flds.get("product_code") == product_code:
+            fields = r.get("fields", {})
+            if fields.get("product_code") == product_code:
                 return r["id"]
     return None
-
 
 ########################################
 # إرسال رسالة نصية لماسنجر
 ########################################
 def send_text_message(recipient_id, message_text):
-    url = "https://graph.facebook.com/v13.0/me/messages"
+    fb_url = "https://graph.facebook.com/v13.0/me/messages"
     headers = {"Content-Type": "application/json"}
     params = {"access_token": PAGE_ACCESS_TOKEN}
-    payload = {
+    data = {
         "recipient": {"id": recipient_id},
         "message": {"text": message_text}
     }
-    requests.post(url, headers=headers, params=params, json=payload)
+    requests.post(fb_url, headers=headers, params=params, json=data)
 
 
 ########################################
-# حفظ المحادثات
+# حفظ الرسالة في Airtable (Messages)
 ########################################
 def save_message(user_id, message_text, sender):
-    urlm = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_MESSAGES}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    url_msg = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_MESSAGES}"
+    hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
     data = {
         "fields": {
             "user_id": str(user_id),
@@ -286,42 +278,37 @@ def save_message(user_id, message_text, sender):
             "sender": sender
         }
     }
-    requests.post(urlm, headers=headers, json=data)
-
+    requests.post(url_msg, headers=hh, json=data)
 
 ########################################
-# تحديث/إنشاء الملخص
+# تحديث الملخص عند وصول 10 رسائل
 ########################################
 def update_summary(user_id):
-    msgs = get_all_messages_list(user_id)
-    if len(msgs) >= 10:
-        summ = summarize_conversation(msgs)
+    msgs_list = get_all_messages(user_id)
+    if len(msgs_list) >= 10:
+        summ = summarize_conversation(msgs_list)
         update_or_create_summary(str(user_id), summ)
 
-
 def get_previous_messages(user_id):
-    # آخر 5 رسائل
-    all_m = get_all_messages_list(user_id)
-    return "\n".join(all_m[-5:])
-
+    all_msgs = get_all_messages(user_id)
+    return "\n".join(all_msgs[-5:])
 
 def get_summary(user_id):
-    urls = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_SUMMARIES}"
-    h = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    rr = requests.get(urls, headers=h)
-    if rr.status_code == 200:
-        recs = rr.json().get("records", [])
-        for r in recs:
-            flds = r.get("fields", {})
+    url_summ = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_SUMMARIES}"
+    hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    r = requests.get(url_summ, headers=hh)
+    if r.status_code == 200:
+        recs = r.json().get("records", [])
+        for rec in recs:
+            flds = rec.get("fields", {})
             if flds.get("user_id") == str(user_id):
                 return flds.get("summary", "")
     return ""
 
-
-def get_all_messages_list(user_id):
-    urll = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_MESSAGES}"
+def get_all_messages(user_id):
+    url_msg = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_MESSAGES}"
     hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    rr = requests.get(urll, headers=hh)
+    rr = requests.get(url_msg, headers=hh)
     if rr.status_code == 200:
         recs = rr.json().get("records", [])
         msgs = []
@@ -331,7 +318,6 @@ def get_all_messages_list(user_id):
                 msgs.append(flds.get("message", ""))
         return msgs
     return []
-
 
 def summarize_conversation(messages_list):
     joined = "\n".join(messages_list)
@@ -343,33 +329,31 @@ def summarize_conversation(messages_list):
         )
         return resp["choices"][0]["message"].get("content", "").strip()
     except Exception as e:
-        print("Summary error:", e)
+        print("Summary Error:", e)
         return ""
 
-
 def update_or_create_summary(user_id, summary_text):
-    urlb = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_SUMMARIES}"
-    heads = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
-    gg = requests.get(urlb, headers=heads)
-    if gg.status_code == 200:
-        recs = gg.json().get("records", [])
-        exist_id = None
-        for rc in recs:
-            if rc.get("fields", {}).get("user_id") == user_id:
-                exist_id = rc["id"]
+    url_summ = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_SUMMARIES}"
+    hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    resp = requests.get(url_summ, headers=hh)
+    if resp.status_code == 200:
+        recs = resp.json().get("records", [])
+        existing_id = None
+        for rr in recs:
+            if rr.get("fields", {}).get("user_id") == user_id:
+                existing_id = rr["id"]
                 break
-        if exist_id:
-            # تحديث
-            patch_url = f"{urlb}/{exist_id}"
-            requests.patch(patch_url, headers=heads, json={
+        if existing_id:
+            # Patch
+            patch_url = f"{url_summ}/{existing_id}"
+            requests.patch(patch_url, headers=hh, json={
                 "fields": {
-                    "user_id": user_id,
                     "summary": summary_text
                 }
             })
         else:
-            # إنشاء
-            requests.post(urlb, headers=heads, json={
+            # Create
+            requests.post(url_summ, headers=hh, json={
                 "fields": {
                     "user_id": user_id,
                     "summary": summary_text
@@ -380,9 +364,8 @@ def update_or_create_summary(user_id, summary_text):
 ########################################
 # إدارة الطلبات
 ########################################
-def create_order(user_id, product_code, quantity,
-                 customer_name=None, phone_number=None, address=None):
-    urlp = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_ORDERS}"
+def create_order(user_id, product_code, quantity, customer_name=None, phone_number=None, address=None):
+    url_o = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_ORDERS}"
     hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
     order_id = f"ORD-{user_id}-{product_code}"
     fields_data = {
@@ -392,43 +375,50 @@ def create_order(user_id, product_code, quantity,
         "quantity": quantity,
         "status": "جديد"
     }
-    if customer_name: fields_data["customer_name"] = customer_name
-    if phone_number:  fields_data["phone_number"] = phone_number
-    if address:       fields_data["address"] = address
+    if customer_name:
+        fields_data["customer_name"] = customer_name
+    if phone_number:
+        fields_data["phone_number"] = phone_number
+    if address:
+        fields_data["address"] = address
 
-    resp = requests.post(urlp, headers=hh, json={"fields": fields_data})
-    if resp.status_code in [200, 201]:
-        return resp.json().get("fields", {})
+    rr = requests.post(url_o, headers=hh, json={"fields": fields_data})
+    if rr.status_code in [200, 201]:
+        return rr.json().get("fields", {})
     else:
-        print("Error creating order:", resp.text)
+        print("Error creating order:", rr.text)
         return None
 
+def update_product_stock(record_id, new_stock):
+    url_p = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_PRODUCTS}/{record_id}"
+    hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    data = {"fields": {"stock": new_stock}}
+    requests.patch(url_p, headers=hh, json=data)
 
 def update_order_status(order_id, new_status):
-    urlp = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_ORDERS}"
+    url_o = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_ORDERS}"
     hh = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    rget = requests.get(urlp, headers=hh)
+    rget = requests.get(url_o, headers=hh)
     if rget.status_code == 200:
         recs = rget.json().get("records", [])
         rec_id = None
-        for rr in recs:
-            if rr.get("fields", {}).get("order_id") == order_id:
-                rec_id = rr["id"]
+        for rc in recs:
+            if rc.get("fields", {}).get("order_id") == order_id:
+                rec_id = rc["id"]
                 break
         if rec_id:
-            patch_url = f"{urlp}/{rec_id}"
+            patch_url = f"{url_o}/{rec_id}"
             data = {"fields": {"status": new_status}}
             pr = requests.patch(patch_url, headers={"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}, json=data)
             if pr.status_code == 200:
                 return True
             else:
-                print("Error updating status:", pr.text)
+                print("Error updating order status:", pr.text)
     return False
 
 
 ########################################
-# تشغيل التطبيق
+# نقطة البداية
 ########################################
-if __name__ == \"__main__\":
-    app.run(host=\"0.0.0.0\", port=5000, debug=True)
-
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
