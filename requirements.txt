@@ -1,7 +1,6 @@
 flask
 gunicorn
 requests
-openai==0.27.0
 pyairtable
 python-dotenv
 
