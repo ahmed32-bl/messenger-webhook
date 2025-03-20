@@ -70,7 +70,10 @@ def webhook():
 def process_message(sender_id, user_message):
     """ معالجة الرسالة الجديدة باستخدام DeepSeek """
     conversation = get_conversation_history(sender_id)
-    chat_history = conversation["fields"].get("Messages_History", "") if conversation else ""
+    chat_history = ""
+    if conversation and "fields" in conversation:
+        chat_history = conversation["fields"].get("Messages_History", "")
+    
     bot_response = get_deepseek_response(chat_history, user_message)
     send_message(sender_id, bot_response)
     save_conversation(sender_id, user_message, bot_response)
