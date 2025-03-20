@@ -72,7 +72,7 @@ def process_message(sender_id, user_message):
     conversation = get_conversation_history(sender_id)
     chat_history = ""
     if conversation and "fields" in conversation:
-        chat_history = conversation["fields"].get("Messages_History", "")
+        chat_history = conversation["fields"].get("conversation_history", "")
     
     bot_response = get_deepseek_response(chat_history, user_message)
     send_message(sender_id, bot_response)
