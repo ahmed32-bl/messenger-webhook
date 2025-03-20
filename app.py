@@ -3,6 +3,7 @@ import requests
 import logging
 from flask import Flask, request, jsonify
 from datetime import datetime
+from openai import OpenAI
 
 # إعداد سجل التتبع
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -21,17 +22,16 @@ WORKERS_TABLE = "Liste_Couturiers"
 # إعداد تطبيق Flask
 app = Flask(__name__)
 
-# 📌 قالب التفاعل مع DeepSeek
 PROMPT_TEMPLATE = """
-📌 باللهجة الجزائرية، وتجنب في جمع معلومات العمال دون الخروج عن الموضوع.
-🔹 **ابدأ المحادثة بنجاح، حتى يستمتع كماسة معي.**
-🔹 إذا كان **رجلاً**: اجمع بياناته كما هي.
-🔹 إذا كانت **امرأة**: أطلب لها أن توفر رقم قريبها حتى نكمل العملية.
-🔹 **اجمع المعلومات الأساسية فقط دون تفاصيل زائدة.**
-🔹 اسأله **إذا سبق له خياطة سراويل**، ثم أطلب منه تحديد **نوع الملابس التي خيطها سابقًا**.
-🔹 إذا لم يذكر نوع الملابس، **لا تستنتج شيئًا من نفسك**، واسأله مجددًا بطريقة لبقة.
-🔹 تأكد من أن لديه **آلة دروات أو سورجي** فقط.
-🔹 لا تتخطى هذه الأسئلة، وتجنب معلومات غير مطلوبة.
+📌 باللهجة الجزائرية وبطريقة محترمة، مهمتك هي جمع معلومات العمال دون الذكور، وملء البيانات في Airtable.
+✅ ابدأ المحادثة بتحية بسيطة، ثم انتقل للأسئلة كما يلي:
+
+1️⃣ إذا كان **ذكرًا**: اجمع بياناته كما هي في الجدول.
+2️⃣ إذا كانت **امرأة**: اسأل عن اسم القريب ورقمه.
+3️⃣ اسأل عن **نوع الملابس التي خيطها** مسبقًا وسجلها.
+4️⃣ تحقق مما إذا كان لديه **آلة دروات أو سورجي**.
+5️⃣ اجمع **المعلومات الأساسية فقط** دون التوسع في التفاصيل.
+6️⃣ لا تتخطَّ أي سؤال، وتأكد من الحصول على كل البيانات.
 """
 
 @app.route("/webhook", methods=["POST"])
@@ -51,7 +51,6 @@ def webhook():
         logging.error(f"⚠️ خطأ أثناء معالجة الطلب: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-
 def get_conversation_history(sender_id):
     """ استرجاع سجل المحادثات السابقة من Airtable """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}"
@@ -61,9 +60,21 @@ def get_conversation_history(sender_id):
         records = response.json().get("records", [])
         for record in records:
             if record["fields"].get("Messenger_ID") == sender_id:
-                return record  # يُعيد سجل المحادثة السابقة
+                return record
     return None
 
+def get_deepseek_response(chat_history, user_message):
+    """ إرسال الطلب إلى DeepSeek وتحليل الاستجابة """
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[
+            {"role": "system", "content": PROMPT_TEMPLATE},
+            {"role": "user", "content": f"سياق سابق:\n{chat_history}\n👤 المستخدم: {user_message}\n🤖 البوت:"},
+        ],
+        stream=False
+    )
+    return response.choices[0].message.content.strip()
 
 def save_conversation(sender_id, user_message, bot_response):
     """ حفظ المحادثة في Airtable """
@@ -95,43 +106,15 @@ def save_conversation(sender_id, user_message, bot_response):
         }]}
         requests.post(url, json=data, headers=headers)
 
-
-def get_deepseek_response(prompt):
-    """ إرسال الطلب إلى DeepSeek وتحليل الرد """
-    url = "https://api.deepseek.com/your-endpoint"  # تأكد من وضع رابط API الصحيح
-    headers = {
-        "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",
-        "Content-Type": "application/json"
-    }
-    payload = {"prompt": prompt, "max_tokens": 150}
-    response = requests.post(url, json=payload, headers=headers)
-    
-    if response.status_code == 200:
-        return response.json().get("response", "⚠️ خطأ في تحليل الرد من DeepSeek")
-    else:
-        return "⚠️ حدث خطأ أثناء الاتصال بـ DeepSeek"
-
-
 def process_message(sender_id, user_message):
     """ معالجة الرسالة الجديدة """
     conversation = get_conversation_history(sender_id)
     chat_history = ""
     if conversation and "fields" in conversation:
         chat_history = conversation["fields"].get("conversation_history", "")
-
-    # 🔥 تحسين بناء prompt لضمان عدم وجود خطأ نصي
-    prompt = (
-        PROMPT_TEMPLATE
-        + f"\n\n📜 **سياق سابق:**\n{chat_history}\n\n👤 **المستخدم:** {user_message}\n🤖 **البوت:**"
-    )
-    
-    logging.info(f"📝 إرسال إلى DeepSeek: {prompt}")
-
-    bot_response = get_deepseek_response(prompt)
-
+    bot_response = get_deepseek_response(chat_history, user_message)
     send_message(sender_id, bot_response)
     save_conversation(sender_id, user_message, bot_response)
-
 
 def send_message(recipient_id, message_text):
     """ إرسال رد إلى المستخدم عبر Facebook Messenger """
@@ -139,9 +122,7 @@ def send_message(recipient_id, message_text):
     payload = {"recipient": {"id": recipient_id}, "message": {"text": message_text}}
     requests.post("https://graph.facebook.com/v18.0/me/messages", headers=headers, json=payload)
 
-
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
-
 
 
