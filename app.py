@@ -64,7 +64,7 @@ def load_documents_from_json(folder_path: str) -> List[Document]:
     return documents
 
 # 4) تحديد المجلد الذي يحوي ملفات JSON داخل المشروع (مثلاً "titre")
-JSON_FOLDER = "titre"
+JSON_FOLDER = "titre/json"
 
 # 5) تحميل المستندات
 documents = load_documents_from_json(JSON_FOLDER)
