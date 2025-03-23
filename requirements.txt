@@ -5,3 +5,9 @@ pyairtable
 python-dotenv
 deepseek
 openai
+langchain
+faiss-cpu
+gunicorn
+tiktoken
+pydantic
+PyYAML
