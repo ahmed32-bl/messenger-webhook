@@ -105,6 +105,7 @@ def get_deepseek_response(context: str, user_message: str, rag_answer: str) -> s
             {"role": "system", "content": "أنت مساعد آلي متخصص في ورشة الخياطة وتتبع تعليمات محددة."},
             {"role": "user", "content": prompt}
         ],
+        temperature=0.0,
         stream=False
     )
     return response.choices[0].message.content.strip()
