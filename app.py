@@ -23,7 +23,7 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")         # لاستخدامه في نظام RAG (Embeddings، استرجاع)
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")         # لاستخدام DeepSeek في التوليد
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")     # لاستخدام DeepSeek في التوليد
 
 # إعداد أسماء الجداول (لـ Airtable)
 CONVERSATIONS_TABLE = "Conversations"
@@ -43,7 +43,6 @@ embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
 
 # 2) إنشاء مخزن المتجهات باستخدام FAISS
 from langchain.vectorstores import FAISS
-vector_store = FAISS(embedding_dimension=1536)  # 1536 هو البُعد النموذجي لبعض نماذج OpenAI
 
 # 3) دالة لتحميل ملفات JSON وتحويلها إلى Documents
 from langchain.schema import Document
@@ -65,7 +64,6 @@ def load_documents_from_json(folder_path: str) -> List[Document]:
     return documents
 
 # 4) تحديد المجلد الذي يحوي ملفات JSON داخل المشروع (مثلاً "titre")
-# يُفضّل وضع المجلد "titre" داخل المشروع على GitHub بحيث يكون متاحاً على Render.
 JSON_FOLDER = "titre"
 
 # 5) تحميل المستندات
@@ -76,8 +74,9 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = text_splitter.split_documents(documents)
 
-# 7) إضافة المقاطع إلى مخزن المتجهات (Vector Store)
-vector_store.add_documents(chunks, embeddings)
+# 7) إنشاء الـVector Store من المستندات والـEmbeddings
+#    بدلاً من استخدام embedding_dimension في __init__، نستعمل from_documents:
+vector_store = FAISS.from_documents(chunks, embeddings)
 
 # 8) إنشاء أداة الاسترجاع (Retriever) من مخزن المتجهات
 retriever = vector_store.as_retriever(search_kwargs={"k": 3})
@@ -92,16 +91,37 @@ qa_chain = RetrievalQA(llm=llm, retriever=retriever)
 # الجزء 2: استخدام DeepSeek لتوليد الرد
 #########################################
 
-def get_deepseek_response(context: str, user_message: str) -> str:
+def get_deepseek_response(context: str, user_message: str, rag_answer: str) -> str:
     """
-    تستخدم هذه الدالة DeepSeek لتوليد رد على أساس:
-    - context: النصوص المسترجعة (السياق) من نظام RAG.
-    - user_message: رسالة المستخدم.
-    يتم بناء prompt يجمع بين السياق والرسالة، ثم يُرسل إلى DeepSeek.
+    تستخدم هذه الدالة DeepSeek لتوليد رد نهائي بناءً على:
+    - السياق المسترجع (context) من نظام RAG.
+    - الإجابة المبدئية من RAG (rag_answer).
+    - رسالة المستخدم (user_message).
+
+    ندمجها في برومبت متكامل يوضّح لDeepSeek دوره كمساعد آلي متخصص في ورشة الخياطة.
     """
     from openai import OpenAI  # نستخدم مكتبة openai مع تغيير base_url لـ DeepSeek
     client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-    prompt = f"سياق:\n{context}\n\nرسالة المستخدم:\n{user_message}\n\nالرد:"
+
+    # برومبت متكامل (وفق ما اتفقنا عليه)
+    prompt = f"""سياق النصوص المسترجعة:
+{context}
+
+إجابة نظام RAG (مبدئية):
+{rag_answer}
+
+تعليمات:
+- أنت مساعد آلي متخصص في ورشة الخياطة.
+- يجب عليك اتباع التعليمات بدقة وتقديم ردود واضحة ومفصلة.
+- استخدم أسلوباً مهذباً ومهنياً في الإجابات.
+- يمكنك الاستعانة بالإجابة المبدئية من نظام RAG، مع تصحيح أي أخطاء أو إضافة معلومات ضرورية.
+
+رسالة المستخدم:
+{user_message}
+
+الرجاء تقديم الرد النهائي بناءً على التعليمات والسياق أعلاه:
+"""
+
     response = client.chat.completions.create(
         model="deepseek-chat",
         messages=[
@@ -118,25 +138,22 @@ def get_deepseek_response(context: str, user_message: str) -> str:
 
 def generate_response(user_message: str) -> str:
     """
-    نستخدم أولاً qa_chain (نظام RAG باستخدام OpenAI) لاسترجاع الإجابة.
-    ثم، نسترجع نصوص ذات صلة (السياق) من الـVector Store ونمررها إلى DeepSeek.
-    هنا يمكنك اختيار الرد من RAG أو DeepSeek أو دمجهما.
-    سنعيد الرد من نظام RAG هنا، لكن يمكنك تعديل هذا الجزء.
+    1) نحصل على إجابة مبدئية من RAG (qa_chain).
+    2) نسترجع النصوص ذات الصلة من الـVector Store كـ"سياق".
+    3) نمرر الإجابة المبدئية والسياق والرسالة الأصلية إلى DeepSeek للحصول على الرد النهائي.
     """
-    # الحصول على الرد باستخدام RAG
+    # 1) الحصول على الرد المبدئي باستخدام RAG
     rag_answer = qa_chain.run(user_message)
     
-    # استرجاع نصوص ذات صلة من الـVector Store
+    # 2) استرجاع نصوص ذات صلة من الـVector Store
     relevant_docs = retriever.get_relevant_documents(user_message)
     context = "\n".join([doc.page_content for doc in relevant_docs])
     
-    # استدعاء DeepSeek للحصول على رد بديل (يمكن دمج الردين)
-    deepseek_answer = get_deepseek_response(context, user_message)
+    # 3) الحصول على الرد النهائي من DeepSeek
+    deepseek_answer = get_deepseek_response(context, user_message, rag_answer)
     
-    # هنا يمكنك اختيار: استخدام الرد من RAG، أو DeepSeek، أو دمجهم.
-    # سنعيد الرد من RAG كمثال:
-    return rag_answer
-    # أو: return f"{rag_answer}\n\n[DeepSeek]: {deepseek_answer}"
+    # إعادة الرد النهائي
+    return deepseek_answer
 
 #########################################
 # الجزء 4: دوال Airtable وبوت ماسنجر
@@ -163,17 +180,40 @@ def save_conversation(sender_id, user_message, bot_response):
         record_id = conversation["id"]
         old_history = conversation["fields"].get("conversation_history", "")
         new_history = old_history + f"\n👤 المستخدم: {user_message}\n🤖 البوت: {bot_response}"
-        data = {"fields": {"conversation_history": new_history, "Dernier_Message": user_message, "Date_Dernier_Contact": str(datetime.now().date())}}
+        data = {
+            "fields": {
+                "conversation_history": new_history,
+                "Dernier_Message": user_message,
+                "Date_Dernier_Contact": str(datetime.now().date())
+            }
+        }
         url_update = f"{url}/{record_id}"
         requests.patch(url_update, json=data, headers=headers)
     else:
-        data = {"records": [{"fields": {"Messenger_ID": sender_id, "conversation_history": f"👤 المستخدم: {user_message}\n🤖 البوت: {bot_response}", "Dernier_Message": user_message, "Date_Dernier_Contact": str(datetime.now().date())}}]}
+        data = {
+            "records": [
+                {
+                    "fields": {
+                        "Messenger_ID": sender_id,
+                        "conversation_history": f"👤 المستخدم: {user_message}\n🤖 البوت: {bot_response}",
+                        "Dernier_Message": user_message,
+                        "Date_Dernier_Contact": str(datetime.now().date())
+                    }
+                }
+            ]
+        }
         requests.post(url, json=data, headers=headers)
 
 def send_message(recipient_id, message_text):
     """ إرسال رد إلى المستخدم عبر Facebook Messenger """
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {PAGE_ACCESS_TOKEN}"}
-    payload = {"recipient": {"id": recipient_id}, "message": {"text": message_text}}
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {PAGE_ACCESS_TOKEN}"
+    }
+    payload = {
+        "recipient": {"id": recipient_id},
+        "message": {"text": message_text}
+    }
     requests.post("https://graph.facebook.com/v18.0/me/messages", headers=headers, json=payload)
 
 def process_message(sender_id, user_message):
@@ -183,7 +223,7 @@ def process_message(sender_id, user_message):
     if conversation and "fields" in conversation:
         chat_history = conversation["fields"].get("conversation_history", "")
     
-    # الحصول على الرد باستخدام نظام RAG + DeepSeek
+    # الحصول على الرد النهائي من نظام RAG + DeepSeek
     bot_response = generate_response(user_message)
     
     # إرسال الرد إلى المستخدم
@@ -225,5 +265,6 @@ def webhook_get():
 #########################################
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, debug=True)
+
 
 
