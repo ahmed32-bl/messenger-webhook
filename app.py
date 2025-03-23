@@ -72,8 +72,12 @@ retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
 from langchain_community.llms import OpenAI
 from langchain.chains import RetrievalQA
-llm = OpenAI(api_key=OPENAI_API_KEY, temperature=0.0)
-qa_chain = RetrievalQA(llm=llm, retriever=retriever)
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type="stuff",
+    retriever=retriever
+)
+
 
 #########################################
 # الجزء 2: استخدام DeepSeek
