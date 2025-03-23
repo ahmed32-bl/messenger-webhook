@@ -70,7 +70,7 @@ chunks = text_splitter.split_documents(documents)
 vector_store = FAISS.from_documents(chunks, embeddings)
 retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
-from langchain.llms import OpenAI
+from langchain_community.llms import OpenAI
 from langchain.chains import RetrievalQA
 llm = OpenAI(api_key=OPENAI_API_KEY, temperature=0.0)
 qa_chain = RetrievalQA(llm=llm, retriever=retriever)
