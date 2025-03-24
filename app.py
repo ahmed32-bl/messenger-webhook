@@ -41,77 +41,27 @@ vector_store = FAISS.from_documents(chunks, embeddings)
 retriever = vector_store.as_retriever()
 qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(api_key=OPENAI_API_KEY), retriever=retriever)
 
-# ============ إعداد Airtable ============
-COUTURIERS_TABLE = "Liste_Couturiers"
-CONVERSATIONS_TABLE = "Conversations"
-HEADERS = {
-    "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-# ============ وظائف Airtable ============
-def search_user_by_messenger_id(messenger_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
-    res = requests.get(url, headers=HEADERS)
-    data = res.json()
-    if data.get("records"):
-        return data["records"][0]
-    return None
-
-def create_new_user(messenger_id, name):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}"
-    payload = {
-        "fields": {
-            "Messenger_ID": messenger_id,
-            "Nom": name,
-            "Date_Inscription": datetime.now().strftime("%Y-%m-%d")
-        }
-    }
-    res = requests.post(url, headers=HEADERS, json=payload)
-    data = res.json()
-    if data.get("id"):
-        return data
-    return None
-
-def create_conversation_record(messenger_id, couturier_id, first_message):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}"
-    payload = {
-        "fields": {
-            "Messenger_ID": messenger_id,
-            "Liste_Couturiers": [couturier_id],
-            "conversation_history": first_message
-        }
-    }
-    res = requests.post(url, headers=HEADERS, json=payload)
-    print("📥 Conversation created ➤", res.status_code, res.text)
-    return res.json()
-
-def update_user_field(record_id, field, value):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}/{record_id}"
-    payload = {"fields": {field: value}}
-    res = requests.patch(url, headers=HEADERS, json=payload)
-    print(f"⤴️ Updating [{field}] = {value} ➤ Response: {res.status_code} — {res.text}")
-    return res.json()
-
-# ============ تحليل الرد GPT-3.5 لفهم المعنى ============
+# ============ GPT-3.5 لتحليل الرد وفهم المعنى ============
 def analyze_with_gpt(text):
     prompt = f"""
-    أنت مساعد ذكي. عندك حوار مع خياط. هدفك هو استخراج جنس الشخص من الردود.
-    - إذا قال أنه راجل أو لمح بذلك، جاوب بـ: راجل
-    - إذا قال أنه مرا أو لمح بذلك، جاوب بـ: مرا
-    - إذا كان غير واضح، جاوب بـ: غير واضح
+أنت مساعد ذكي، عندك حوار مع خياط، هدفك هو استخراج جنس الشخص من الردود:
+- إذا قال أنه راجل أو لمح بذلك، جاوب بـ: راجل
+- إذا قال أنه مرا أو لمح بذلك، جاوب بـ: مرا
+- إذا كان غير واضح، جاوب بـ: غير واضح
 
-    النص: {text}
-    النوع:
-    """
+النص: {text}
+النوع:
+"""
     response = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "أنت مساعد لغوي ذكي"},
             {"role": "user", "content": prompt}
         ]
     )
     return response.choices[0].message.content.strip()
+
+# تابع بقية الكود هنا...
+
 
 # ============ إرسال رسالة عبر فيسبوك ============
 def send_message(sender_id, text):
