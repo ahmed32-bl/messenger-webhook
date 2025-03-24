@@ -42,6 +42,7 @@ qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(api_key=OPENAI_API_KEY), r
 
 # ============ إعداد Airtable ============
 COUTURIERS_TABLE = "Liste_Couturiers"
+CONVERSATIONS_TABLE = "Conversations"
 HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
@@ -66,6 +67,22 @@ def create_new_user(messenger_id, name):
         }
     }
     res = requests.post(url, headers=HEADERS, json=payload)
+    data = res.json()
+    if data.get("id"):
+        return data
+    return None
+
+def create_conversation_record(messenger_id, couturier_id, first_message):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}"
+    payload = {
+        "fields": {
+            "Messenger_ID": messenger_id,
+            "Liste_Couturiers": [couturier_id],
+            "conversation_history": first_message
+        }
+    }
+    res = requests.post(url, headers=HEADERS, json=payload)
+    print("📥 Conversation created ➤", res.status_code, res.text)
     return res.json()
 
 def update_user_field(record_id, field, value):
@@ -99,7 +116,10 @@ def webhook():
 
     if not user:
         user = create_new_user(sender_id, "")
+        if not user:
+            return "ok"
         record_id = user["id"]
+        create_conversation_record(sender_id, record_id, message)
         send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو مع خياطين من وهران فقط، ونجمعو بعض المعلومات باش نشوفو إذا نقدرو نخدمو مع بعض. نبدأو وحدة بوحدة.")
         send_message(sender_id, "باش نعرفو نبدأو، راك راجل ولا مرا؟")
         return "ok"
