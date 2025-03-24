@@ -104,29 +104,35 @@ def webhook():
         send_message(sender_id, "باش نعرفو نبدأو، راك راجل ولا مرا؟")
         return "ok"
 
-    fields = user["fields"]
     record_id = user["id"]
+    fields = user["fields"]
 
     if not fields.get("Genre"):
         if "راجل" in message:
             update_user_field(record_id, "Genre", "راجل")
-            send_message(sender_id, "وين تسكن فالضبط في وهران؟")
         elif "مرا" in message:
             update_user_field(record_id, "Genre", "مرا")
-            send_message(sender_id, "وين تسكن فالضبط في وهران؟")
         else:
             send_message(sender_id, "باش نكمل معاك، قولي فقط راك راجل ولا مرا؟")
+            return "ok"
+        user = search_user_by_messenger_id(sender_id)
+        fields = user["fields"]
+        send_message(sender_id, "وين تسكن فالضبط في وهران؟")
         return "ok"
 
     if not fields.get("Ville"):
         update_user_field(record_id, "Ville", "وهران")
         update_user_field(record_id, "Quartier", message)
+        user = search_user_by_messenger_id(sender_id)
+        fields = user["fields"]
         send_message(sender_id, "عندك خبرة من قبل في خياطة السروال نصف الساق ولا السرفات؟")
         return "ok"
 
     if not fields.get("Experience_Sirwat"):
         if any(x in message for x in ["نعم", "واه", "خدمت", "عندي"]):
             update_user_field(record_id, "Experience_Sirwat", True)
+            user = search_user_by_messenger_id(sender_id)
+            fields = user["fields"]
             send_message(sender_id, "شحال تقدر تخيط من سروال نصف الساق في السيمانة؟")
         else:
             send_message(sender_id, "نعتذرو، لازم تكون عندك خبرة في خياطة السروال ولا السرفات.")
@@ -134,6 +140,8 @@ def webhook():
 
     if not fields.get("Capacite_Hebdomadaire"):
         update_user_field(record_id, "Capacite_Hebdomadaire", message)
+        user = search_user_by_messenger_id(sender_id)
+        fields = user["fields"]
         send_message(sender_id, "عندك سورجي؟")
         return "ok"
 
@@ -142,6 +150,8 @@ def webhook():
             update_user_field(record_id, "Surjeteuse", True)
         else:
             update_user_field(record_id, "Surjeteuse", False)
+        user = search_user_by_messenger_id(sender_id)
+        fields = user["fields"]
         send_message(sender_id, "عندك دورات وسورجي؟")
         return "ok"
 
@@ -151,4 +161,3 @@ def webhook():
 # ============ تشغيل التطبيق ============
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
-
