@@ -53,6 +53,7 @@ def search_user_by_messenger_id(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
     res = requests.get(url, headers=HEADERS)
     data = res.json()
+    print("🔍 search_user_by_messenger_id:", data)
     if data.get("records"):
         return data["records"][0]
     return None
@@ -68,6 +69,7 @@ def create_new_user(messenger_id, name):
     }
     res = requests.post(url, headers=HEADERS, json=payload)
     data = res.json()
+    print("🆕 create_new_user:", data)
     if data.get("id"):
         return data
     return None
@@ -82,7 +84,7 @@ def create_conversation_record(messenger_id, couturier_id, first_message):
         }
     }
     res = requests.post(url, headers=HEADERS, json=payload)
-    print("📥 Conversation created ➤", res.status_code, res.text)
+    print("📥 create_conversation_record:", res.status_code, res.text)
     return res.json()
 
 def update_user_field(record_id, field, value):
@@ -94,33 +96,21 @@ def update_user_field(record_id, field, value):
 
 # ============ إرسال رسالة عبر فيسبوك ============
 def send_message(sender_id, text):
-    append_to_conversation_history(sender_id, f"🤖 {text}")
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
         "recipient": {"id": sender_id},
         "message": {"text": text}
     }
+    print("📤 Sending:", payload)
     requests.post(url, json=payload)
 
 # ============ نقطة استقبال Webhook ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    def append_to_conversation_history(messenger_id, new_message):
-        url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
-        res = requests.get(url, headers=HEADERS)
-        records = res.json().get("records", [])
-        if records:
-            record_id = records[0]["id"]
-            fields = records[0].get("fields", {})
-            current_history = fields.get("conversation_history", "")
-            updated_history = f"{current_history}\n{new_entry}"
-            payload = {"fields": {"conversation_history": updated_history}}
-            requests.patch(f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}/{record_id}", headers=HEADERS, json=payload)
     data = request.json
     event = data.get("entry", [{}])[0].get("messaging", [{}])[0]
     sender_id = event.get("sender", {}).get("id")
     message = event.get("message", {}).get("text")
-    append_to_conversation_history(sender_id, message)
 
     if not sender_id or not message:
         return "ok"
@@ -130,6 +120,7 @@ def webhook():
     if not user:
         user = create_new_user(sender_id, "")
         if not user:
+            send_message(sender_id, "وقع مشكل في التسجيل، جرب مرة أخرى")
             return "ok"
         record_id = user["id"]
         create_conversation_record(sender_id, record_id, message)
@@ -196,7 +187,8 @@ def webhook():
     return "ok"
 
 # ============ تشغيل التطبيق ============
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
