@@ -60,9 +60,6 @@ def analyze_with_gpt(text):
     )
     return response.choices[0].message.content.strip()
 
-# تابع بقية الكود هنا...
-
-
 # ============ إرسال رسالة عبر فيسبوك ============
 def send_message(sender_id, text):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
@@ -71,6 +68,8 @@ def send_message(sender_id, text):
         "message": {"text": text}
     }
     requests.post(url, json=payload)
+
+# ============ البحث عن المستخدم في Airtable ============
 def search_user_by_messenger_id(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers"
     headers = {
@@ -84,6 +83,7 @@ def search_user_by_messenger_id(messenger_id):
     if data["records"]:
         return data["records"][0]
     return None
+
 # ============ نقطة استقبال Webhook ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -98,6 +98,7 @@ def webhook():
     user = search_user_by_messenger_id(sender_id)
 
     if not user:
+        # يجب تعريف هذه الدوال لاحقًا في الكود الحقيقي
         user = create_new_user(sender_id, "")
         if not user:
             return "ok"
@@ -167,6 +168,7 @@ def webhook():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
