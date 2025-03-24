@@ -8,6 +8,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import RetrievalQA
+from deepseek import DeepSeek  # ✅ استدعاء DeepSeek لتحليل الردود
 
 # ============ إعداد التطبيق ============
 app = Flask(__name__)
@@ -17,6 +18,10 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")  # مفتاح DeepSeek
+
+# ============ إعداد DeepSeek ============
+deepseek = DeepSeek(api_key=DEEPSEEK_API_KEY)
 
 # ============ إعداد RAG بـ OpenAI ============
 embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
@@ -53,7 +58,6 @@ def search_user_by_messenger_id(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
     res = requests.get(url, headers=HEADERS)
     data = res.json()
-    print("🔍 search_user_by_messenger_id:", data)
     if data.get("records"):
         return data["records"][0]
     return None
@@ -69,7 +73,6 @@ def create_new_user(messenger_id, name):
     }
     res = requests.post(url, headers=HEADERS, json=payload)
     data = res.json()
-    print("🆕 create_new_user:", data)
     if data.get("id"):
         return data
     return None
@@ -84,7 +87,7 @@ def create_conversation_record(messenger_id, couturier_id, first_message):
         }
     }
     res = requests.post(url, headers=HEADERS, json=payload)
-    print("📥 create_conversation_record:", res.status_code, res.text)
+    print("📥 Conversation created ➤", res.status_code, res.text)
     return res.json()
 
 def update_user_field(record_id, field, value):
@@ -101,7 +104,6 @@ def send_message(sender_id, text):
         "recipient": {"id": sender_id},
         "message": {"text": text}
     }
-    print("📤 Sending:", payload)
     requests.post(url, json=payload)
 
 # ============ نقطة استقبال Webhook ============
@@ -120,24 +122,31 @@ def webhook():
     if not user:
         user = create_new_user(sender_id, "")
         if not user:
-            send_message(sender_id, "وقع مشكل في التسجيل، جرب مرة أخرى")
             return "ok"
         record_id = user["id"]
         create_conversation_record(sender_id, record_id, message)
         send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو مع خياطين من وهران فقط، ونجمعو بعض المعلومات باش نشوفو إذا نقدرو نخدمو مع بعض. نبدأو وحدة بوحدة.")
-        send_message(sender_id, "باش نعرفو نبدأو، راك راجل ولا مرا؟")
+        send_message(sender_id, "معليش نعرف إذا راني نتكلم مع راجل ولا مرا؟")
         return "ok"
 
     record_id = user["id"]
     fields = user["fields"]
 
     if not fields.get("Genre"):
-        if "راجل" in message:
+        prompt = f"""
+        المستخدم راه يجاوب على سؤال: "وش جنسكم؟"
+        الجواب: {message}
+
+        فقط جاوب بكلمة وحدة: راجل أو مرا أو غير واضح.
+        """
+        genre_prediction = deepseek.chat(prompt)
+
+        if "راجل" in genre_prediction:
             update_user_field(record_id, "Genre", "راجل")
-        elif "مرا" in message:
+        elif "مرا" in genre_prediction:
             update_user_field(record_id, "Genre", "مرا")
         else:
-            send_message(sender_id, "باش نكمل معاك، قولي فقط راك راجل ولا مرا؟")
+            send_message(sender_id, "معليش نعرف إذا راني نتكلم مع راجل ولا مرا؟")
             return "ok"
         user = search_user_by_messenger_id(sender_id)
         fields = user["fields"]
@@ -170,7 +179,7 @@ def webhook():
         return "ok"
 
     if not fields.get("Surjeteuse"):
-        if "نعم" in message or "واه" in message:
+        if "نعم" in message or "واه" in message or "عندي" in message:
             update_user_field(record_id, "Surjeteuse", True)
         else:
             update_user_field(record_id, "Surjeteuse", False)
@@ -179,7 +188,6 @@ def webhook():
         send_message(sender_id, "عندك دورات وسورجي؟")
         return "ok"
 
-    # ✅ في حال المستخدم رجع يحكي بعد التوقف، يكمل من آخر خانة ناقصة
     if fields.get("Surjeteuse"):
         send_message(sender_id, "راهي المعلومات كاملة عندنا. إذا كاين حاجة جديدة ولا تحب تزيد حاجة، قولها.")
     else:
@@ -188,7 +196,8 @@ def webhook():
 
 # ============ تشغيل التطبيق ============
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
