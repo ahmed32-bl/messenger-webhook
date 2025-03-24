@@ -1,46 +1,37 @@
-############################################################
-# app.py
-# هذا الملف يدمج بوت ماسنجر مع نظام RAG.
-# يستخدم OpenAI (أو بديل مفتوح المصدر) لإنتاج الـEmbeddings وبناء نظام الاسترجاع (RAG)،
-# ثم يستخدم DeepSeek لتوليد الرد النهائي.
-############################################################
-
 import os
 import json
-import requests
-import logging
-from datetime import datetime
 from typing import List
-
 from flask import Flask, request, jsonify
+from langchain.embeddings import DeepSeekEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.chains import RetrievalQA
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+import openai
+import datetime
+import airtable
 
-# إعداد سجل التتبع
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# تحميل متغيرات البيئة
-PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-
-# إعداد أسماء الجداول (لـ Airtable)
-CONVERSATIONS_TABLE = "Conversations"
-WORKERS_TABLE = "Liste_Couturiers"
-
-# تهيئة تطبيق Flask
+# تهيئة Flask
 app = Flask(__name__)
 
-#########################################
-# الجزء 1: نظام RAG باستخدام OpenAI
-#########################################
+# قيم API من متغيرات البيئة
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+DEESEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-from langchain.embeddings import OpenAIEmbeddings
-embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
+# اعداد DeepSeek و OpenAI API
+openai.api_key = DEESEEK_API_KEY
 
-from langchain.vectorstores import FAISS
-from langchain.schema import Document
+def create_embedding_model():
+    return DeepSeekEmbeddings()
+
+embeddings = create_embedding_model()
+
+# نسخدم FAISS لتخزين وبحث المعرفة
+vector_store = FAISS(embedding_dimension=1536)
+
+# تحميل مستندات JSON
+JSON_FOLDER = "titre/json"
 
 def load_documents_from_json(folder_path: str) -> List[Document]:
     documents = []
@@ -55,159 +46,75 @@ def load_documents_from_json(folder_path: str) -> List[Document]:
                     documents.append(doc)
     return documents
 
-JSON_FOLDER = "titre/json"
 documents = load_documents_from_json(JSON_FOLDER)
-
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = text_splitter.split_documents(documents)
+vector_store.add_documents(chunks, embeddings)
+retriever = vector_store.as_retriever()
+qa_chain = RetrievalQA(retriever=retriever)
 
-vector_store = FAISS.from_documents(chunks, embeddings)
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+# إعداد Airtable
+airtable_couturiers = airtable.Airtable(AIRTABLE_BASE_ID, 'Liste_Couturiers', AIRTABLE_API_KEY)
 
-from langchain_community.llms import OpenAI
-from langchain.chains import RetrievalQA
-llm = OpenAI(api_key=OPENAI_API_KEY, temperature=0.0)
-qa_chain = RetrievalQA.from_chain_type(llm=llm, chain_type="stuff", retriever=retriever)
+# أسئلة البوت المنظمة حسب الجدول
+QUESTIONS = [
+    ("Genre", "بغيت نعرف، راك راجل ولا مرا؟"),
+    ("Ville", "باش نكملو، لازم تكون من وهران. واش راك من وهران؟ إذا إييه، وين بالضبط؟"),
+    ("Experience_Sirwat", "سبقلك خيطت سروال نصف الساق من قبل؟"),
+    ("Experience_Surjeteuse", "وعندك دراية بالخياطة بالسورجي؟"),
+    ("Type_Vetements", "وش من نوع الخياطات موالف تخدم؟"),
+    ("Capacite_Hebdomadaire", "شحال تقريبا تقدر تخدم من سروال نصف الساق في السيمانة؟"),
+    ("Materiel_Dispo", "وشنو الماتريال لي عندك متوفر في داركم؟"),
+    ("Drouat", "عندك دروات نخدمو عليهم؟"),
+    ("Telephone", "عطيني رقم هاتف نخاطبك فيه."),
+    ("Nom_Proche", "إلا كنت مرا، عطيني اسم شخص قريب منك (راجل) باش نقدر نتفاهمو معاه."),
+    ("Contact_Proche", "ورقم الهاتف تاعو من فضلك؟")
+]
 
-#########################################
-# الجزء 2: استخدام DeepSeek لتوليد الرد
-#########################################
+# مسار API للرد
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    data = request.get_json()
+    sender_id = data.get("sender_id")
+    message = data.get("message")
 
-def get_deepseek_response(context: str, user_message: str, rag_answer: str) -> str:
-    from openai import OpenAI
-    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-
-    prompt = f"""سياق النصوص المسترجعة:
-{context}
-
-إجابة نظام RAG (مبدئية):
-{rag_answer}
-
-
-📌 دورك:
-أنت مساعد آلي خاص بورشة خياطة، تتحدث باللهجة الجزائرية فقط بأسلوب محترم وأخوي.
-مهمتك جمع المعلومات الضرورية فقط من العامل/العاملة دون الخروج عن الموضوع.
-احرص على استعمال الدارجة اجزائرية
-- يجب عليك اتباع التعليمات بدقة وتقديم ردود واضحة ومفصلة.
-- استخدم أسلوباً مهذباً ومهنياً في الإجابات.
-- يمكنك الاستعانة بالإجابة المبدئية من نظام RAG، مع تصحيح أي أخطاء أو إضافة معلومات ضرورية.
-
-رسالة المستخدم:
-{user_message}
-
-الرجاء تقديم الرد النهائي بناءً على التعليمات والسياق أعلاه:
-"""
-
-    response = client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[
-            {"role": "system", "content": "أنت مساعد آلي متخصص في ورشة الخياطة وتتبع تعليمات محددة."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.0,
-        stream=False
-    )
-    return response.choices[0].message.content.strip()
-
-#########################################
-# الجزء 3: دمج RAG وDeepSeek
-#########################################
-
-def generate_response(user_message: str) -> str:
-    rag_answer = qa_chain.run(user_message)
-    relevant_docs = retriever.get_relevant_documents(user_message)
-    context = "\n".join([doc.page_content for doc in relevant_docs])
-    return get_deepseek_response(context, user_message, rag_answer)
-
-#########################################
-# الجزء 4: Airtable وMessenger
-#########################################
-
-def get_conversation_history(sender_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        records = response.json().get("records", [])
-        for record in records:
-            if record["fields"].get("Messenger_ID") == sender_id:
-                return record
-    return None
-
-def save_conversation(sender_id, user_message, bot_response):
-    conversation = get_conversation_history(sender_id)
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
-    if conversation:
-        record_id = conversation["id"]
-        old_history = conversation["fields"].get("conversation_history", "")
-        new_history = old_history + f"\n\U0001F464 المستخدم: {user_message}\n\U0001F916 البوت: {bot_response}"
-        data = {
-            "fields": {
-                "conversation_history": new_history,
-                "Dernier_Message": user_message,
-                "Date_Dernier_Contact": str(datetime.now().date())
-            }
-        }
-        requests.patch(f"{url}/{record_id}", json=data, headers=headers)
+    # 1. يراجع هل هذا العامل موجود في Airtable
+    records = airtable_couturiers.search('Messenger_ID', sender_id)
+    if records:
+        record = records[0]
     else:
-        data = {
-            "records": [
-                {
-                    "fields": {
-                        "Messenger_ID": sender_id,
-                        "conversation_history": f"\U0001F464 المستخدم: {user_message}\n\U0001F916 البوت: {bot_response}",
-                        "Dernier_Message": user_message,
-                        "Date_Dernier_Contact": str(datetime.now().date())
-                    }
-                }
-            ]
-        }
-        requests.post(url, json=data, headers=headers)
+        # إذا ماكانش موجود، ينشيء سطر جديد
+        record = airtable_couturiers.insert({
+            "Messenger_ID": sender_id,
+            "conversation_history": message,
+            "Date_Inscription": datetime.datetime.now().strftime('%Y-%m-%d')
+        })
 
-def send_message(recipient_id, message_text):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {PAGE_ACCESS_TOKEN}"
-    }
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {"text": message_text}
-    }
-    requests.post("https://graph.facebook.com/v18.0/me/messages", headers=headers, json=payload)
+    fields = record['fields']
+    updates = {}
 
-def process_message(sender_id, user_message):
-    conversation = get_conversation_history(sender_id)
-    chat_history = conversation["fields"].get("conversation_history", "") if conversation else ""
-    bot_response = generate_response(user_message)
-    send_message(sender_id, bot_response)
-    save_conversation(sender_id, user_message, bot_response)
+    # 2. يراجع المعلومات ويشوف شنو ناقص
+    for field, question in QUESTIONS:
+        if field not in fields or not fields[field]:
+            # DeepSeek prompt to guess the value from message
+            guessed_value = qa_chain.run(f"{message}\n\nوش تعني هاذ الجواب بالنسبة للحقل: {field}؟")
+            if guessed_value.strip():
+                updates[field] = guessed_value.strip()
+                break
+            else:
+                return jsonify({"reply": question})
 
-@app.route("/webhook", methods=["POST"])
-def webhook_post():
-    try:
-        data = request.get_json()
-        for entry in data.get("entry", []):
-            for message_data in entry.get("messaging", []):
-                sender_id = message_data["sender"]["id"]
-                if "message" in message_data:
-                    user_message = message_data["message"].get("text", "")
-                    logging.info(f"\U0001F4E9 رسالة من {sender_id}: {user_message}")
-                    process_message(sender_id, user_message)
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        logging.error(f"⚠️ خطأ أثناء المعالجة: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    # 3. تحديث Airtable بالمعلومات الجديدة
+    if updates:
+        airtable_couturiers.update(record['id'], updates)
+        return jsonify({"reply": "تمام، سجلت المعلومة. نكملو؟"})
 
-@app.route("/webhook", methods=["GET"])
-def webhook_get():
-    if request.args.get("hub.mode") == "subscribe" and request.args.get("hub.verify_token") == VERIFY_TOKEN:
-        return request.args.get("hub.challenge")
-    return "Error: invalid verification token"
+    return jsonify({"reply": "شكرا على تعاونك، نعيطولك ونتفاهو إن شاء الله!"})
 
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000, debug=True)
+# تشغيل Flask
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+
 
 
 
