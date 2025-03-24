@@ -3,8 +3,8 @@ import json
 import requests
 from flask import Flask, request, jsonify
 from datetime import datetime
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import RetrievalQA
@@ -19,6 +19,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ============ إعداد RAG بـ OpenAI ============
 embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
+vector_store = FAISS()
 
 # ============ تحميل وثائق JSON إلى الذاكرة ============
 def load_documents_from_json(folder_path):
@@ -36,7 +37,7 @@ def load_documents_from_json(folder_path):
 docs = load_documents_from_json("titre/json")
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = text_splitter.split_documents(docs)
-vector_store = FAISS.from_documents(chunks, embeddings)
+vector_store.add_documents(chunks, embeddings)
 retriever = vector_store.as_retriever()
 qa_chain = RetrievalQA.from_chain_type(llm=None, retriever=retriever)
 
