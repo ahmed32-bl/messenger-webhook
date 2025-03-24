@@ -71,7 +71,19 @@ def send_message(sender_id, text):
         "message": {"text": text}
     }
     requests.post(url, json=payload)
-
+def search_user_by_messenger_id(messenger_id):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}"
+    }
+    params = {
+        "filterByFormula": f"Messenger_ID = '{messenger_id}'"
+    }
+    response = requests.get(url, headers=headers, params=params)
+    data = response.json()
+    if data["records"]:
+        return data["records"][0]
+    return None
 # ============ نقطة استقبال Webhook ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
