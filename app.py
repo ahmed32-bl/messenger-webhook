@@ -1,26 +1,26 @@
 import os
 import json
 import requests
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from datetime import datetime
-
-# LangChain - RAG (OpenAI)
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import RetrievalQA
 
-# === إعداد Flask ===
+# ============ إعداد التطبيق ============
 app = Flask(__name__)
 
-# === مفاتيح البيئة ===
+# ============ مفاتيح البيئة ============
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 
-# === تحميل بيانات JSON ===
+# ============ إعداد RAG بـ OpenAI ============
+embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
+
 def load_documents_from_json(folder_path):
     documents = []
     for filename in os.listdir(folder_path):
@@ -33,27 +33,28 @@ def load_documents_from_json(folder_path):
                     documents.append(Document(page_content=text, metadata={"filename": filename}))
     return documents
 
-# === إنشاء قاعدة متجهات RAG ===
 docs = load_documents_from_json("titre/json")
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = text_splitter.split_documents(docs)
-embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
 vector_store = FAISS.from_documents(chunks, embeddings)
 retriever = vector_store.as_retriever()
 qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(api_key=OPENAI_API_KEY), retriever=retriever)
 
-# === إعداد Airtable ===
+# ============ إعداد Airtable ============
 COUTURIERS_TABLE = "Liste_Couturiers"
 HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
 }
 
+# ============ وظائف Airtable ============
 def search_user_by_messenger_id(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
     res = requests.get(url, headers=HEADERS)
     data = res.json()
-    return data["records"][0] if data.get("records") else None
+    if data.get("records"):
+        return data["records"][0]
+    return None
 
 def create_new_user(messenger_id, name):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}"
@@ -70,16 +71,19 @@ def create_new_user(messenger_id, name):
 def update_user_field(record_id, field, value):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}/{record_id}"
     payload = {"fields": {field: value}}
-    return requests.patch(url, headers=HEADERS, json=payload).json()
+    res = requests.patch(url, headers=HEADERS, json=payload)
+    return res.json()
 
-def send_message(recipient_id, text):
+# ============ إرسال رسالة عبر فيسبوك ============
+def send_message(sender_id, text):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
-        "recipient": {"id": recipient_id},
+        "recipient": {"id": sender_id},
         "message": {"text": text}
     }
     requests.post(url, json=payload)
 
+# ============ نقطة استقبال Webhook ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -93,15 +97,13 @@ def webhook():
     user = search_user_by_messenger_id(sender_id)
     if not user:
         create_new_user(sender_id, "")
-        send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو غير مع خياطين من وهران، نطرح عليك شوية أسئلة باش نشوفو إذا نقدر نخدمو مع بعض. نبدأو وحدة بوحدة.")
-        send_message(sender_id, "راك راجل ولا مرا؟")
+        send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو مع خياطين من وهران فقط، ونجمعو بعض المعلومات باش نشوفو إذا نقدرو نخدمو مع بعض. نبدأو وحدة بوحدة.")
+        send_message(sender_id, "باش نعرفو نبدأو، راك راجل ولا مرا؟")
         return "ok"
 
-    # الخطوات التالية تعتمد على الأعمدة الموجودة في Airtable حسب الاتفاق المسبق
     fields = user["fields"]
     record_id = user["id"]
 
-    # مثال بسيط لتحديث الحقول تدريجياً (اكمل بنفس المنطق)
     if not fields.get("Genre"):
         if "راجل" in message:
             update_user_field(record_id, "Genre", "راجل")
@@ -110,19 +112,40 @@ def webhook():
             update_user_field(record_id, "Genre", "مرا")
             send_message(sender_id, "وين تسكن فالضبط في وهران؟")
         else:
-            send_message(sender_id, "باش نكمل معاك، قولنا فقط راك راجل ولا مرا؟")
+            send_message(sender_id, "باش نكمل معاك، قولي فقط راك راجل ولا مرا؟")
         return "ok"
 
-    # مثال على استخدام الذكاء الاصطناعي في الردود (RAG):
-    if "سروال" in message or "خياطة" in message:
-        result = qa_chain.run(message)
-        send_message(sender_id, result)
+    if not fields.get("Ville"):
+        update_user_field(record_id, "Ville", "وهران")
+        update_user_field(record_id, "Quartier", message)
+        send_message(sender_id, "عندك خبرة من قبل في خياطة السروال نصف الساق ولا السرفات؟")
         return "ok"
 
-    send_message(sender_id, "شكراً على تواصلك، نكملو الأسئلة إن شاء الله! ✂️")
+    if not fields.get("Experience_Sirwat"):
+        if any(x in message for x in ["نعم", "واه", "خدمت", "عندي"]):
+            update_user_field(record_id, "Experience_Sirwat", True)
+            send_message(sender_id, "شحال تقدر تخيط من سروال نصف الساق في السيمانة؟")
+        else:
+            send_message(sender_id, "نعتذرو، لازم تكون عندك خبرة في خياطة السروال ولا السرفات.")
+        return "ok"
+
+    if not fields.get("Capacite_Hebdomadaire"):
+        update_user_field(record_id, "Capacite_Hebdomadaire", message)
+        send_message(sender_id, "عندك سورجي؟")
+        return "ok"
+
+    if not fields.get("Surjeteuse"):
+        if "نعم" in message or "واه" in message:
+            update_user_field(record_id, "Surjeteuse", True)
+        else:
+            update_user_field(record_id, "Surjeteuse", False)
+        send_message(sender_id, "عندك دورات وسورجي؟")
+        return "ok"
+
+    send_message(sender_id, "بارك الله فيك، جمعنا كل المعلومات. نعيطولك ونتفاهو إن شاء الله!")
     return "ok"
 
-# ============ تشغيل التطبيق ==========
+# ============ تشغيل التطبيق ============
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
 
