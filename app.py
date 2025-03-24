@@ -72,6 +72,7 @@ def update_user_field(record_id, field, value):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}/{record_id}"
     payload = {"fields": {field: value}}
     res = requests.patch(url, headers=HEADERS, json=payload)
+    print(f"⤴️ Updating [{field}] = {value} ➤ Response: {res.status_code} — {res.text}")
     return res.json()
 
 # ============ إرسال رسالة عبر فيسبوك ============
@@ -95,8 +96,10 @@ def webhook():
         return "ok"
 
     user = search_user_by_messenger_id(sender_id)
+
     if not user:
-        create_new_user(sender_id, "")
+        user = create_new_user(sender_id, "")
+        record_id = user["id"]
         send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو مع خياطين من وهران فقط، ونجمعو بعض المعلومات باش نشوفو إذا نقدرو نخدمو مع بعض. نبدأو وحدة بوحدة.")
         send_message(sender_id, "باش نعرفو نبدأو، راك راجل ولا مرا؟")
         return "ok"
