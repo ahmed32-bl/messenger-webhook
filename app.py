@@ -19,7 +19,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ============ إعداد RAG بـ OpenAI ============
 embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
-vector_store = FAISS()
+vector_store = FAISS.from_documents(chunks, embeddings)
 
 # ============ تحميل وثائق JSON إلى الذاكرة ============
 def load_documents_from_json(folder_path):
