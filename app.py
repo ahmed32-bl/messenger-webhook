@@ -94,6 +94,7 @@ def update_user_field(record_id, field, value):
 
 # ============ إرسال رسالة عبر فيسبوك ============
 def send_message(sender_id, text):
+    append_to_conversation_history(sender_id, f"🤖 {text}")
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
         "recipient": {"id": sender_id},
@@ -104,10 +105,23 @@ def send_message(sender_id, text):
 # ============ نقطة استقبال Webhook ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    def append_to_conversation_history(messenger_id, new_message):
+        url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
+        res = requests.get(url, headers=HEADERS)
+        records = res.json().get("records", [])
+        if records:
+            record_id = records[0]["id"]
+            fields = records[0].get("fields", {})
+            current_history = fields.get("conversation_history", "")
+            updated_history = f"{current_history}
+{new_message}"
+            payload = {"fields": {"conversation_history": updated_history}}
+            requests.patch(f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}/{record_id}", headers=HEADERS, json=payload)
     data = request.json
     event = data.get("entry", [{}])[0].get("messaging", [{}])[0]
     sender_id = event.get("sender", {}).get("id")
     message = event.get("message", {}).get("text")
+    append_to_conversation_history(sender_id, message)
 
     if not sender_id or not message:
         return "ok"
@@ -184,5 +198,6 @@ def webhook():
 
 # ============ تشغيل التطبيق ============
 if __name__ == '__main__':
-   port = int(os.environ.get("PORT", 5000))
-app.run(host="0.0.0.0", port=port)
+        port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
