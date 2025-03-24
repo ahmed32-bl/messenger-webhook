@@ -9,19 +9,16 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import RetrievalQA
 
-# ============ إعداد التطبيق ============
+# ============ Flask App ============
 app = Flask(__name__)
 
-# ============ مفاتيح البيئة ============
+# ============ Environment Variables ============
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_TOKEN")
 
-# ============ إعداد RAG بـ OpenAI ============
-embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
-vector_store = FAISS()
-
-# ============ تحميل وثائق JSON إلى الذاكرة ============
+# ============ Load JSON documents ============
 def load_documents_from_json(folder_path):
     documents = []
     for filename in os.listdir(folder_path):
@@ -34,22 +31,25 @@ def load_documents_from_json(folder_path):
                     documents.append(Document(page_content=text, metadata={"filename": filename}))
     return documents
 
+# 1. Load and chunk documents
 docs = load_documents_from_json("titre/json")
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = text_splitter.split_documents(docs)
-vector_store.add_documents(chunks, embeddings)
+
+# 2. Embeddings and FAISS
+embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
+vector_store = FAISS.from_documents(chunks, embeddings)
 retriever = vector_store.as_retriever()
 qa_chain = RetrievalQA.from_chain_type(llm=None, retriever=retriever)
 
-# ============ إعداد Airtable ============
+# ============ Airtable Setup ============
 COUTURIERS_TABLE = "Liste_Couturiers"
-CONV_TABLE = "Conversations"
 HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_API_KEY}",
     "Content-Type": "application/json"
 }
 
-# ============ وظائف مساعدة ============
+# ============ Airtable Functions ============
 def search_user_by_messenger_id(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
     res = requests.get(url, headers=HEADERS)
@@ -76,7 +76,16 @@ def update_user_field(record_id, field, value):
     res = requests.patch(url, headers=HEADERS, json=payload)
     return res.json()
 
-# ============ منطق المحادثة ============
+# ============ Facebook Messenger Send Message ============
+def send_message(sender_id, text):
+    url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+    payload = {
+        "recipient": {"id": sender_id},
+        "message": {"text": text}
+    }
+    requests.post(url, json=payload)
+
+# ============ Webhook Logic ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -87,16 +96,13 @@ def webhook():
     if not sender_id or not message:
         return "ok"
 
-    # البحث أو إنشاء المستخدم
     user = search_user_by_messenger_id(sender_id)
     if not user:
-        # إرسال الترحيب وتسجيل المستخدم
         create_new_user(sender_id, "")
         send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو مع خياطين من وهران فقط، ونجمعو بعض المعلومات باش نشوفو إذا نقدرو نخدمو مع بعض. نبدأو وحدة بوحدة.")
         send_message(sender_id, "باش نعرفو نبدأو، راك راجل ولا مرا؟")
         return "ok"
 
-    # تحديد الحقول الناقصة
     fields = user["fields"]
     record_id = user["id"]
 
@@ -141,17 +147,7 @@ def webhook():
     send_message(sender_id, "بارك الله فيك، جمعنا كل المعلومات. نعيطولك ونتفاهو إن شاء الله!")
     return "ok"
 
-# ============ إرسال رسالة للعميل عبر فيسبوك ============
-def send_message(sender_id, text):
-    PAGE_ACCESS_TOKEN = os.getenv("FB_PAGE_TOKEN")
-    url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    payload = {
-        "recipient": {"id": sender_id},
-        "message": {"text": text}
-    }
-    requests.post(url, json=payload)
-
-# ============ تشغيل التطبيق ============
+# ============ Run App ============
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
 
