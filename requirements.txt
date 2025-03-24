@@ -14,5 +14,5 @@ PyYAML
 langchain-community
 langchain-openai
 faiss-cpu
-git+https://github.com/deepseek-ai/deepseek-openai.git
+deepseek-openai
 
