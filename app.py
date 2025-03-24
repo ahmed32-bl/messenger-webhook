@@ -113,8 +113,7 @@ def webhook():
             record_id = records[0]["id"]
             fields = records[0].get("fields", {})
             current_history = fields.get("conversation_history", "")
-            updated_history = f"{current_history}
-{new_message}"
+            updated_history = f"{current_history}\n{new_entry}"
             payload = {"fields": {"conversation_history": updated_history}}
             requests.patch(f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}/{record_id}", headers=HEADERS, json=payload)
     data = request.json
