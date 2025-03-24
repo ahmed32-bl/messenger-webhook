@@ -69,7 +69,7 @@ def send_message(sender_id, text):
     }
     requests.post(url, json=payload)
 
-# ============ البحث عن المستخدم في Airtable ============
+# ============ البحث عن مستخدم ============
 def search_user_by_messenger_id(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers"
     headers = {
@@ -83,6 +83,53 @@ def search_user_by_messenger_id(messenger_id):
     if data["records"]:
         return data["records"][0]
     return None
+
+# ============ إنشاء مستخدم جديد ============
+def create_new_user(messenger_id, genre):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "fields": {
+            "Messenger_ID": messenger_id,
+            "Genre": genre
+        }
+    }
+    response = requests.post(url, headers=headers, json=data)
+    return response.json() if response.status_code == 200 else None
+
+# ============ تحديث خانة للمستخدم ============
+def update_user_field(record_id, field, value):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers/{record_id}"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "fields": {
+            field: value
+        }
+    }
+    requests.patch(url, headers=headers, json=data)
+
+# ============ حفظ المحادثات ============
+def create_conversation_record(messenger_id, record_id, message):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Conversations"
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "fields": {
+            "Message": message,
+            "Timestamp": datetime.now().isoformat(),
+            "Couturier": [record_id],
+            "Messenger_ID": messenger_id
+        }
+    }
+    requests.post(url, headers=headers, json=data)
 
 # ============ نقطة استقبال Webhook ============
 @app.route("/webhook", methods=["POST"])
@@ -98,7 +145,6 @@ def webhook():
     user = search_user_by_messenger_id(sender_id)
 
     if not user:
-        # يجب تعريف هذه الدوال لاحقًا في الكود الحقيقي
         user = create_new_user(sender_id, "")
         if not user:
             return "ok"
@@ -157,7 +203,6 @@ def webhook():
         send_message(sender_id, "عندك دورات وسورجي؟")
         return "ok"
 
-    # ✅ في حال المستخدم رجع يحكي بعد التوقف، يكمل من آخر خانة ناقصة
     if fields.get("Surjeteuse"):
         send_message(sender_id, "راهي المعلومات كاملة عندنا. إذا كاين حاجة جديدة ولا تحب تزيد حاجة، قولها.")
     else:
@@ -168,6 +213,7 @@ def webhook():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
