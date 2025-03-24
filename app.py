@@ -8,7 +8,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains import RetrievalQA
-from deepseek-openai import DeepSeek  # ✅ استدعاء DeepSeek لتحليل الردود
+from openai import OpenAI
 
 # ============ إعداد التطبيق ============
 app = Flask(__name__)
@@ -18,7 +18,6 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 # ============ إعداد RAG بـ OpenAI ============
 embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
@@ -42,16 +41,170 @@ vector_store = FAISS.from_documents(chunks, embeddings)
 retriever = vector_store.as_retriever()
 qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(api_key=OPENAI_API_KEY), retriever=retriever)
 
-# ============ DeepSeek لتحليل الردود ============
-def analyze_reply_with_deepseek(reply):
-    response = DeepSeek.chat(
-        api_key=DEEPSEEK_API_KEY,
+# ============ إعداد Airtable ============
+COUTURIERS_TABLE = "Liste_Couturiers"
+CONVERSATIONS_TABLE = "Conversations"
+HEADERS = {
+    "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# ============ وظائف Airtable ============
+def search_user_by_messenger_id(messenger_id):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}?filterByFormula={{Messenger_ID}}='{messenger_id}'"
+    res = requests.get(url, headers=HEADERS)
+    data = res.json()
+    if data.get("records"):
+        return data["records"][0]
+    return None
+
+def create_new_user(messenger_id, name):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}"
+    payload = {
+        "fields": {
+            "Messenger_ID": messenger_id,
+            "Nom": name,
+            "Date_Inscription": datetime.now().strftime("%Y-%m-%d")
+        }
+    }
+    res = requests.post(url, headers=HEADERS, json=payload)
+    data = res.json()
+    if data.get("id"):
+        return data
+    return None
+
+def create_conversation_record(messenger_id, couturier_id, first_message):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CONVERSATIONS_TABLE}"
+    payload = {
+        "fields": {
+            "Messenger_ID": messenger_id,
+            "Liste_Couturiers": [couturier_id],
+            "conversation_history": first_message
+        }
+    }
+    res = requests.post(url, headers=HEADERS, json=payload)
+    print("📥 Conversation created ➤", res.status_code, res.text)
+    return res.json()
+
+def update_user_field(record_id, field, value):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{COUTURIERS_TABLE}/{record_id}"
+    payload = {"fields": {field: value}}
+    res = requests.patch(url, headers=HEADERS, json=payload)
+    print(f"⤴️ Updating [{field}] = {value} ➤ Response: {res.status_code} — {res.text}")
+    return res.json()
+
+# ============ تحليل الرد GPT-3.5 لفهم المعنى ============
+def analyze_with_gpt(text):
+    prompt = f"""
+    أنت مساعد ذكي. عندك حوار مع خياط. هدفك هو استخراج جنس الشخص من الردود.
+    - إذا قال أنه راجل أو لمح بذلك، جاوب بـ: راجل
+    - إذا قال أنه مرا أو لمح بذلك، جاوب بـ: مرا
+    - إذا كان غير واضح، جاوب بـ: غير واضح
+
+    النص: {text}
+    النوع:
+    """
+    response = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
+        model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "أنت مساعد افتراضي ذكي تحلل ردود المستخدمين لتحديد إذا كانوا رجال أو نساء أو غير واضح فقط من خلال محتوى الجواب. جاوب فقط بكلمة: راجل أو مرا أو غير واضح."},
-            {"role": "user", "content": f"{reply}"},
+            {"role": "system", "content": "أنت مساعد لغوي ذكي"},
+            {"role": "user", "content": prompt}
         ]
     )
-    return response["choices"][0]["message"]["content"].strip()
+    return response.choices[0].message.content.strip()
+
+# ============ إرسال رسالة عبر فيسبوك ============
+def send_message(sender_id, text):
+    url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+    payload = {
+        "recipient": {"id": sender_id},
+        "message": {"text": text}
+    }
+    requests.post(url, json=payload)
+
+# ============ نقطة استقبال Webhook ============
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json
+    event = data.get("entry", [{}])[0].get("messaging", [{}])[0]
+    sender_id = event.get("sender", {}).get("id")
+    message = event.get("message", {}).get("text")
+
+    if not sender_id or not message:
+        return "ok"
+
+    user = search_user_by_messenger_id(sender_id)
+
+    if not user:
+        user = create_new_user(sender_id, "")
+        if not user:
+            return "ok"
+        record_id = user["id"]
+        create_conversation_record(sender_id, record_id, message)
+        send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو مع خياطين من وهران فقط، ونجمعو بعض المعلومات باش نشوفو إذا نقدرو نخدمو مع بعض. نبدأو وحدة بوحدة.")
+        send_message(sender_id, "معليش نعرف إذا راني نتكلم مع راجل ولا مرا؟")
+        return "ok"
+
+    record_id = user["id"]
+    fields = user["fields"]
+
+    if not fields.get("Genre"):
+        genre_detected = analyze_with_gpt(message)
+        if genre_detected in ["راجل", "مرا"]:
+            update_user_field(record_id, "Genre", genre_detected)
+            user = search_user_by_messenger_id(sender_id)
+            fields = user["fields"]
+            send_message(sender_id, "وين تسكن فالضبط في وهران؟")
+        else:
+            send_message(sender_id, "معليش نعرف إذا راني نتكلم مع راجل ولا مرا؟")
+        return "ok"
+
+    if not fields.get("Ville"):
+        update_user_field(record_id, "Ville", "وهران")
+        update_user_field(record_id, "Quartier", message)
+        user = search_user_by_messenger_id(sender_id)
+        fields = user["fields"]
+        send_message(sender_id, "عندك خبرة من قبل في خياطة السروال نصف الساق ولا السرفات؟")
+        return "ok"
+
+    if not fields.get("Experience_Sirwat"):
+        if any(x in message for x in ["نعم", "واه", "خدمت", "عندي", "بدعيات"]):
+            update_user_field(record_id, "Experience_Sirwat", True)
+            user = search_user_by_messenger_id(sender_id)
+            fields = user["fields"]
+            send_message(sender_id, "شحال تقدر تخيط من سروال نصف الساق في السيمانة؟")
+        else:
+            send_message(sender_id, "نعتذرو، لازم تكون عندك خبرة في خياطة السروال ولا السرفات.")
+        return "ok"
+
+    if not fields.get("Capacite_Hebdomadaire"):
+        update_user_field(record_id, "Capacite_Hebdomadaire", message)
+        user = search_user_by_messenger_id(sender_id)
+        fields = user["fields"]
+        send_message(sender_id, "عندك سورجي؟")
+        return "ok"
+
+    if not fields.get("Surjeteuse"):
+        if any(x in message for x in ["نعم", "واه", "عندي"]):
+            update_user_field(record_id, "Surjeteuse", True)
+        else:
+            update_user_field(record_id, "Surjeteuse", False)
+        user = search_user_by_messenger_id(sender_id)
+        fields = user["fields"]
+        send_message(sender_id, "عندك دورات وسورجي؟")
+        return "ok"
+
+    # ✅ في حال المستخدم رجع يحكي بعد التوقف، يكمل من آخر خانة ناقصة
+    if fields.get("Surjeteuse"):
+        send_message(sender_id, "راهي المعلومات كاملة عندنا. إذا كاين حاجة جديدة ولا تحب تزيد حاجة، قولها.")
+    else:
+        send_message(sender_id, "نكملو وين حبست، عاود جاوب على آخر سؤال من فضلك")
+    return "ok"
+
+# ============ تشغيل التطبيق ============
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 
 
