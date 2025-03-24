@@ -19,7 +19,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # ============ إعداد RAG بـ OpenAI ============
 embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
-vector_store = FAISS(embedding_dimension=1536)
 
 # ============ تحميل وثائق JSON إلى الذاكرة ============
 def load_documents_from_json(folder_path):
@@ -37,7 +36,7 @@ def load_documents_from_json(folder_path):
 docs = load_documents_from_json("titre/json")
 text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
 chunks = text_splitter.split_documents(docs)
-vector_store.add_documents(chunks, embeddings)
+vector_store = FAISS.from_documents(chunks, embeddings)
 retriever = vector_store.as_retriever()
 qa_chain = RetrievalQA.from_chain_type(llm=None, retriever=retriever)
 
@@ -154,6 +153,7 @@ def send_message(sender_id, text):
 # ============ تشغيل التطبيق ============
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000)
+
 
 
 
