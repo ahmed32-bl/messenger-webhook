@@ -60,7 +60,6 @@ def create_client(messenger_id):
         if "id" in resp and "fields" in resp:
             return resp
         else:
-            print("⚠️ الرد لا يحتوي على id أو fields.")
             return None
     except Exception as e:
         print("❌ خطأ في الاتصال بـ Airtable:", str(e))
@@ -107,7 +106,7 @@ def webhook():
             send_message(sender_id, "🙏 وقع مشكل تقني صغير، جرب بعد لحظات")
             return "ok"
         else:
-            send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا.")
+            send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا. أرسل لنا رمز المنتج باش نكملو الطلب.")
 
     fields = client.get("fields", {})
     conversation = fields.get("Conversation", "")
