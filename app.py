@@ -2,7 +2,8 @@ import os
 import requests
 import logging
 from flask import Flask, request
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 from openai import OpenAI
 
 logging.basicConfig(level=logging.DEBUG)
@@ -15,7 +16,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
-# إرسال رسالة
+# -------------------- أدوات أساسية --------------------
+
 def send_message(sender_id, text):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
@@ -24,7 +26,8 @@ def send_message(sender_id, text):
     }
     requests.post(url, json=payload)
 
-# البحث عن زبون
+# -------------------- Airtable --------------------
+
 def search_client(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/clients"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -34,17 +37,18 @@ def search_client(messenger_id):
     data = response.json()
     return data['records'][0] if data.get('records') else None
 
-# إنشاء زبون جديد
 def create_client(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/clients"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
+    # توقيت الجزائر
+    alg_time = datetime.now(pytz.timezone("Africa/Algiers")).strftime("%Y-%m-%dT%H:%M:%S")
     data = {
         "fields": {
             "Messenger_ID": messenger_id,
-            "Date Inscription": datetime.now().isoformat()
+            "Date Inscription": alg_time
         }
     }
     response = requests.post(url, headers=headers, json=data)
@@ -54,7 +58,6 @@ def create_client(messenger_id):
     else:
         return None
 
-# تحديث بيانات زبون
 def update_client(record_id, fields):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/clients/{record_id}"
     headers = {
@@ -64,21 +67,20 @@ def update_client(record_id, fields):
     response = requests.patch(url, headers=headers, json={"fields": fields})
     logging.debug("✏️ Update client response: %s", response.text)
 
-# تسجيل المحادثة
-def log_conversation(record_id, message):
-    client = search_client_by_id(record_id)
-    old_convo = client.get("fields", {}).get("Conversation", "")
-    new_convo = f"{old_convo}\n[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {message}"
-    update_client(record_id, {"Conversation": new_convo})
-
-# استرجاع زبون عبر ID
 def search_client_by_id(record_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/clients/{record_id}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     response = requests.get(url, headers=headers)
     return response.json()
 
-# التحقق من رقم الهاتف
+def log_conversation(record_id, message):
+    client = search_client_by_id(record_id)
+    old_convo = client.get("fields", {}).get("Conversation", "")
+    new_convo = f"{old_convo}\n[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {message}"
+    update_client(record_id, {"Conversation": new_convo})
+
+# -------------------- GPT تحليل --------------------
+
 def is_valid_phone(text):
     try:
         response = client_openai.chat.completions.create(
@@ -89,7 +91,64 @@ def is_valid_phone(text):
     except:
         return False
 
-# نقطة Webhook
+def is_answer_relevant(step, user_text):
+    try:
+        prompt = f"""
+        أنت مساعد افتراضي تسجل معلومات زبون طلب منتج. المرحلة الحالية هي: {step}.
+        الزبون كتب: \"{user_text}\"
+        هل هذا الجواب مناسب لهذه المرحلة؟
+
+        جاوب فقط بـ \"نعم\" أو \"لا\".
+        """
+        response = client_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return "نعم" in response.choices[0].message.content
+    except:
+        return True
+
+def detect_question_type(user_text):
+    try:
+        prompt = f"""
+        أنت مساعد افتراضي تفهم رسائل الزبائن.
+        الرسالة: \"{user_text}\"
+
+        هل هذه الرسالة:
+        1. تحتوي على معلومات مثل رقم أو عنوان أو رمز منتج؟
+        2. أو أنها سؤال عن منتج، سعر، توصيل...؟
+        3. أو أنها غير مفهومة؟
+
+        جاوب فقط بـ:
+        - \"معلومة\"
+        - \"سؤال\"
+        - \"غير واضح\"
+        """
+        response = client_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content.strip()
+    except:
+        return "غير واضح"
+
+# -------------------- جدول Infos_Magasin --------------------
+
+def search_in_infos(user_text):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Infos_Magasin"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    response = requests.get(url, headers=headers)
+    records = response.json().get("records", [])
+
+    for record in records:
+        question = record["fields"].get("Question", "").lower()
+        answer = record["fields"].get("Réponse", "")
+        if question in user_text.lower():
+            return answer
+    return None
+
+# -------------------- Webhook --------------------
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -101,7 +160,6 @@ def webhook():
         send_message(sender_id, "بعتلنا المعلومات كتابة فقط من فضلك.")
         return "ok"
 
-    # البحث عن الزبون
     client = search_client(sender_id)
     if not client:
         client = create_client(sender_id)
@@ -114,31 +172,45 @@ def webhook():
     record_id = client["id"]
     fields = client.get("fields", {})
 
-    # تسجيل المحادثة
     log_conversation(record_id, user_text)
+    kind = detect_question_type(user_text)
+
+    if kind == "سؤال":
+        answer = search_in_infos(user_text)
+        send_message(sender_id, answer or "🔎 خليني نشوف ونجاوبك إن شاء الله.")
+        return "ok"
 
     if not fields.get("Code Produit"):
-        update_client(record_id, {"Code Produit": user_text})
-        send_message(sender_id, "جيد ✅ أرسل رقم هاتفك باش نتواصلو معاك.")
+        if is_answer_relevant("رمز المنتج", user_text):
+            update_client(record_id, {"Code Produit": user_text})
+            send_message(sender_id, "جيد ✅ أرسل رقم هاتفك باش نتواصلو معاك.")
+        else:
+            send_message(sender_id, "📌 نحتاج رمز المنتج لي راه على الصورة (مثلاً: 1123). بعتلي الرمز باش نكملو.")
         return "ok"
 
     if not fields.get("Téléphone"):
-        if is_valid_phone(user_text):
-            update_client(record_id, {"Téléphone": user_text})
-            send_message(sender_id, "ممتاز 👍 الآن أرسل عنوان التوصيل.")
+        if is_answer_relevant("رقم الهاتف", user_text):
+            if is_valid_phone(user_text):
+                update_client(record_id, {"Téléphone": user_text})
+                send_message(sender_id, "ممتاز 👍 الآن أرسل عنوان التوصيل.")
+            else:
+                send_message(sender_id, "❌ الرقم غير صحيح. حاول تبعت رقم جزائري يبدأ بـ 05 أو 06 أو 07.")
         else:
-            send_message(sender_id, "❌ الرقم غير صحيح. حاول تبعت رقم جزائري (يبدأ بـ 05 أو 06 أو 07).")
+            send_message(sender_id, "👀 راني نستنى رقم الهاتف، بعتلي رقم باش نكملو.")
         return "ok"
 
     if not fields.get("Adresse Livraison"):
-        update_client(record_id, {"Adresse Livraison": user_text})
-        send_message(sender_id, "📦 شكرا! سجلنا الطلب وسنتواصل معاك قريبًا إن شاء الله.")
+        if is_answer_relevant("عنوان التوصيل", user_text):
+            update_client(record_id, {"Adresse Livraison": user_text})
+            send_message(sender_id, "📦 شكرا! سجلنا الطلب وسنتواصل معاك قريبًا إن شاء الله.")
+        else:
+            send_message(sender_id, "📍 أرسل العنوان الكامل (المدينة + الحي)، باش نوصلولك الطلب.")
         return "ok"
 
-    # إذا كل شيء مسجل
-    send_message(sender_id, "👍 إذا تحب تستفسر على شي آخر، راني هنا.")
+    send_message(sender_id, "✅ إذا تحب تستفسر على شي آخر، راني هنا.")
     return "ok"
 
-# تشغيل التطبيق
+# -------------------- تشغيل --------------------
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
