@@ -33,7 +33,7 @@ def analyze_response(prompt, text):
 
 # البحث عن الزبون في Airtable
 def search_client(messenger_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients"
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/clients"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     params = {"filterByFormula": f"Messenger_ID='{messenger_id}'"}
     resp = requests.get(url, headers=headers, params=params).json()
@@ -41,7 +41,7 @@ def search_client(messenger_id):
 
 # إنشاء زبون جديد
 def create_client(messenger_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients"
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/clients"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
