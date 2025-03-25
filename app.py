@@ -6,6 +6,7 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
+# مفاتيح البيئة
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
@@ -13,13 +14,16 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
-# إرسال رسالة عبر Messenger
+# إرسال رسالة على Messenger
 def send_message(sender_id, text):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    payload = {"recipient": {"id": sender_id}, "message": {"text": text}}
+    payload = {
+        "recipient": {"id": sender_id},
+        "message": {"text": text}
+    }
     requests.post(url, json=payload)
 
-# تحليل الرد باستخدام GPT
+# تحليل الرد باستخدام OpenAI
 def analyze_response(prompt, text):
     response = client_openai.chat.completions.create(
         model="gpt-3.5-turbo",
@@ -27,7 +31,7 @@ def analyze_response(prompt, text):
     )
     return response.choices[0].message.content.strip()
 
-# البحث عن المستخدم في Airtable
+# البحث عن الزبون في Airtable
 def search_client(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -35,28 +39,43 @@ def search_client(messenger_id):
     resp = requests.get(url, headers=headers, params=params).json()
     return resp['records'][0] if resp['records'] else None
 
-# إنشاء سجل جديد
+# إنشاء زبون جديد
 def create_client(messenger_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
     data = {
         "fields": {
             "Messenger_ID": messenger_id,
             "Date Inscription": datetime.now().isoformat()
         }
     }
-    response = requests.post(url, headers=headers, json=data)
-    print("🔴 Airtable response:", response.text)  # 🧪 هذا فقط لمراقبة المشكلة
-    resp = response.json()
-    return resp if "id" in resp and "fields" in resp else None
 
-# تحديث بيانات العميل
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        print("🔴 Airtable response:", response.text)
+        resp = response.json()
+        if "id" in resp and "fields" in resp:
+            return resp
+        else:
+            print("⚠️ الرد لا يحتوي على id أو fields.")
+            return None
+    except Exception as e:
+        print("❌ خطأ في الاتصال بـ Airtable:", str(e))
+        return None
+
+# تحديث بيانات الزبون
 def update_client(record_id, fields):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients/{record_id}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
     requests.patch(url, headers=headers, json={"fields": fields})
 
-# محاولة الرد على سؤال عام من جدول Infos_Magasin
+# محاولة الرد على أسئلة عامة من جدول Infos_Magasin
 def try_answer_general_question(user_text):
     intent = analyze_response("هل هذا النص عبارة عن سؤال عام عن الأسعار أو التوصيل أو طرق الدفع؟ أجب فقط بنعم أو لا", user_text)
     if "نعم" not in intent:
@@ -67,43 +86,48 @@ def try_answer_general_question(user_text):
     response = requests.get(url, headers=headers).json()
 
     for record in response.get("records", []):
-        question_keywords = record["fields"].get("Question", "").lower()
-        if any(word in user_text.lower() for word in question_keywords.split()):
+        keywords = record["fields"].get("Question", "").lower()
+        if any(word in user_text.lower() for word in keywords.split()):
             return record["fields"].get("Réponse")
 
     return "ما نقدرش نجاوبك بدقة، المسؤول راح يتواصل معاك ويوضحلك كل التفاصيل إن شاء الله."
 
+# نقطة دخول البوت
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
     event = data["entry"][0]["messaging"][0]
     sender_id = event["sender"]["id"]
 
+    # استرجاع أو إنشاء الزبون
     client = search_client(sender_id)
-
     if not client:
         client = create_client(sender_id)
         if not client:
             send_message(sender_id, "🙏 وقع مشكل تقني صغير، جرب بعد لحظات")
             return "ok"
-        send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا. أرسل لنا رمز المنتج باش نكملو الطلب.")
-        return "ok"
+        else:
+            send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا.")
 
     fields = client.get("fields", {})
     conversation = fields.get("Conversation", "")
 
-    # التحقق من وجود مرفقات (صورة، صوت، فيديو)
+    # تحقق من وجود مرفق غير نصي
     if "attachments" in event["message"]:
         send_message(sender_id, "معليش، ما نقدرش نقرا الصوت ولا الصور ولا الفيديوهات. بعتلنا المعلومات كتابة فقط.")
         new_conversation = conversation + f"\n[{datetime.now()}] (مرفق غير مدعوم)"
         update_client(client["id"], {"Conversation": new_conversation})
         return "ok"
 
-    # متابعة المحادثة النصية
+    # استلام نص
     user_text = event["message"].get("text", "").strip()
     if not user_text:
         send_message(sender_id, "بعتلنا المعلومات كتابة فقط من فضلك.")
         return "ok"
+
+    # تسجيل المحادثة
+    new_conversation = conversation + f"\n[{datetime.now()}] {user_text}"
+    update_client(client["id"], {"Conversation": new_conversation})
 
     # محاولة الرد على سؤال عام
     if not fields.get("Code Produit"):
@@ -113,7 +137,7 @@ def webhook():
             send_message(sender_id, "أرسل لنا رمز المنتج باش نكملو الطلب.")
             return "ok"
 
-    # جمع البيانات المعتادة
+    # جمع البيانات تدريجياً
     if not fields.get("Code Produit"):
         code_produit = user_text
         valid_code = analyze_response("هل هذا النص يمثل رمز منتج؟", code_produit)
@@ -137,14 +161,11 @@ def webhook():
         update_client(client["id"], {"Adresse Livraison": address})
         send_message(sender_id, "شكرا! سجلنا الطلب بنجاح وراح نتواصلو معاك قريب.")
 
-    # تسجيل كل شيء في Conversation
-    new_conversation = conversation + f"\n[{datetime.now()}] {user_text}"
-    update_client(client["id"], {"Conversation": new_conversation})
-
     return "ok"
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
