@@ -45,7 +45,9 @@ def create_client(messenger_id):
             "Date Inscription": datetime.now().isoformat()
         }
     }
-    resp = requests.post(url, headers=headers, json=data).json()
+    response = requests.post(url, headers=headers, json=data)
+    print("🔴 Airtable response:", response.text)  # 🧪 هذا فقط لمراقبة المشكلة
+    resp = response.json()
     return resp if "id" in resp and "fields" in resp else None
 
 # تحديث بيانات العميل
@@ -82,7 +84,7 @@ def webhook():
     if not client:
         client = create_client(sender_id)
         if not client:
-            send_message(sender_id, "وقع مشكل تقني صغير، جرب بعد لحظات 🙏")
+            send_message(sender_id, "🙏 وقع مشكل تقني صغير، جرب بعد لحظات")
             return "ok"
         send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا. أرسل لنا رمز المنتج باش نكملو الطلب.")
         return "ok"
@@ -143,6 +145,7 @@ def webhook():
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
