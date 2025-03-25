@@ -14,5 +14,6 @@ PyYAML
 langchain-community
 langchain-openai
 faiss-cpu
+pytz
 
 
