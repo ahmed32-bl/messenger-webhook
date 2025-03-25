@@ -1,218 +1,106 @@
 import os
-import json
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request
 from datetime import datetime
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
-from langchain.chains import RetrievalQA
 from openai import OpenAI
 
-# ============ إعداد التطبيق ============
 app = Flask(__name__)
 
-# ============ مفاتيح البيئة ============
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# ============ إعداد RAG بـ OpenAI ============
-embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
+client_openai = OpenAI(api_key=OPENAI_API_KEY)
 
-def load_documents_from_json(folder_path):
-    documents = []
-    for filename in os.listdir(folder_path):
-        if filename.endswith(".json"):
-            path = os.path.join(folder_path, filename)
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                for entry in data:
-                    text = entry.get("conversation", "")
-                    documents.append(Document(page_content=text, metadata={"filename": filename}))
-    return documents
+# إرسال رسالة عبر Messenger
+def send_message(sender_id, text):
+    url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+    payload = {"recipient": {"id": sender_id}, "message": {"text": text}}
+    requests.post(url, json=payload)
 
-docs = load_documents_from_json("titre/json")
-text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-chunks = text_splitter.split_documents(docs)
-vector_store = FAISS.from_documents(chunks, embeddings)
-retriever = vector_store.as_retriever()
-qa_chain = RetrievalQA.from_chain_type(llm=ChatOpenAI(api_key=OPENAI_API_KEY), retriever=retriever)
-
-# ============ GPT-3.5 لتحليل الرد وفهم المعنى ============
-def analyze_with_gpt(text):
-    prompt = f"""
-أنت مساعد ذكي، عندك حوار مع خياط، هدفك هو استخراج جنس الشخص من الردود:
-- إذا قال أنه راجل أو لمح بذلك، جاوب بـ: راجل
-- إذا قال أنه مرا أو لمح بذلك، جاوب بـ: مرا
-- إذا كان غير واضح، جاوب بـ: غير واضح
-
-النص: {text}
-النوع:
-"""
-    response = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
+# تحليل الرد باستخدام GPT للتحقق من مناسبة الرد
+def analyze_response(prompt, text):
+    response = client_openai.chat.completions.create(
         model="gpt-3.5-turbo",
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
+        messages=[{"role": "user", "content": f"{prompt}: {text}"}]
     )
     return response.choices[0].message.content.strip()
 
-# ============ إرسال رسالة عبر فيسبوك ============
-def send_message(sender_id, text):
-    url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    payload = {
-        "recipient": {"id": sender_id},
-        "message": {"text": text}
-    }
-    requests.post(url, json=payload)
+# البحث عن المستخدم بواسطة Messenger ID
+def search_client(messenger_id):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    params = {"filterByFormula": f"Messenger_ID='{messenger_id}'"}
+    resp = requests.get(url, headers=headers, params=params).json()
+    return resp['records'][0] if resp['records'] else None
 
-# ============ البحث عن مستخدم ============
-def search_user_by_messenger_id(messenger_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}"
-    }
-    params = {
-        "filterByFormula": f"Messenger_ID = '{messenger_id}'"
-    }
-    response = requests.get(url, headers=headers, params=params)
-    data = response.json()
-    if data["records"]:
-        return data["records"][0]
-    return None
+# إنشاء سجل جديد للزبون
+def create_client(messenger_id):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    data = {"fields": {"Messenger_ID": messenger_id, "Date Inscription": datetime.now().isoformat()}}
+    resp = requests.post(url, headers=headers, json=data).json()
+    return resp
 
-# ============ إنشاء مستخدم جديد ============
-def create_new_user(messenger_id, genre):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "fields": {
-            "Messenger_ID": messenger_id,
-            "Genre": genre
-        }
-    }
-    response = requests.post(url, headers=headers, json=data)
-    return response.json() if response.status_code == 200 else None
+# تحديث بيانات الزبون في الجدول
+def update_client(record_id, fields):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Clients/{record_id}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    requests.patch(url, headers=headers, json={"fields": fields})
 
-# ============ تحديث خانة للمستخدم ============
-def update_user_field(record_id, field, value):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Liste_Couturiers/{record_id}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "fields": {
-            field: value
-        }
-    }
-    requests.patch(url, headers=headers, json=data)
-
-# ============ حفظ المحادثات ============
-def create_conversation_record(messenger_id, record_id, message):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Conversations"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "fields": {
-            "Message": message,
-            "Timestamp": datetime.now().isoformat(),
-            "Couturier": [record_id],
-            "Messenger_ID": messenger_id
-        }
-    }
-    requests.post(url, headers=headers, json=data)
-
-# ============ نقطة استقبال Webhook ============
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
-    event = data.get("entry", [{}])[0].get("messaging", [{}])[0]
-    sender_id = event.get("sender", {}).get("id")
-    message = event.get("message", {}).get("text")
+    event = data["entry"][0]["messaging"][0]
+    sender_id = event["sender"]["id"]
 
-    if not sender_id or not message:
+    client = search_client(sender_id)
+
+    if not client:
+        client = create_client(sender_id)
+        send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا. ابعثلنا صورة الحذاء مع رمز المنتج.")
         return "ok"
 
-    user = search_user_by_messenger_id(sender_id)
+    fields = client.get("fields", {})
+    conversation = fields.get("Conversation", "")
 
-    if not user:
-        user = create_new_user(sender_id, "")
-        if not user:
-            return "ok"
-        record_id = user["id"]
-        create_conversation_record(sender_id, record_id, message)
-        send_message(sender_id, "وعليكم السلام، مرحبا بيك في ورشة الخياطة عن بعد. نخدمو مع خياطين من وهران فقط، ونجمعو بعض المعلومات باش نشوفو إذا نقدرو نخدمو مع بعض. نبدأو وحدة بوحدة.")
-        send_message(sender_id, "معليش نعرف إذا راني نتكلم مع راجل ولا مرا؟")
-        return "ok"
+    if "attachments" in event["message"] and not fields.get("Image Produit"):
+        image_url = event["message"]["attachments"][0]["payload"]["url"]
+        update_client(client["id"], {"Image Produit": image_url})
+        send_message(sender_id, "شكرا! أرسل لنا الآن رمز المنتج المكتوب على الصورة.")
 
-    record_id = user["id"]
-    fields = user["fields"]
-
-    if not fields.get("Genre"):
-        genre_detected = analyze_with_gpt(message)
-        if genre_detected in ["راجل", "مرا"]:
-            update_user_field(record_id, "Genre", genre_detected)
-            user = search_user_by_messenger_id(sender_id)
-            fields = user["fields"]
-            send_message(sender_id, "وين تسكن فالضبط في وهران؟")
+    elif not fields.get("Code Produit"):
+        code_produit = event["message"].get("text")
+        valid_code = analyze_response("هل هذا النص يمثل رمز منتج؟", code_produit)
+        if "نعم" in valid_code:
+            update_client(client["id"], {"Code Produit": code_produit})
+            send_message(sender_id, "جيد، أعطينا رقم هاتفك باش نتواصلو معاك.")
         else:
-            send_message(sender_id, "معليش نعرف إذا راني نتكلم مع راجل ولا مرا؟")
-        return "ok"
+            send_message(sender_id, "الرجاء التأكد من إرسال رمز المنتج الصحيح.")
 
-    if not fields.get("Ville"):
-        update_user_field(record_id, "Ville", "وهران")
-        update_user_field(record_id, "Quartier", message)
-        user = search_user_by_messenger_id(sender_id)
-        fields = user["fields"]
-        send_message(sender_id, "عندك خبرة من قبل في خياطة السروال نصف الساق ولا السرفات؟")
-        return "ok"
-
-    if not fields.get("Experience_Sirwat"):
-        if any(x in message for x in ["نعم", "واه", "خدمت", "عندي", "بدعيات"]):
-            update_user_field(record_id, "Experience_Sirwat", True)
-            user = search_user_by_messenger_id(sender_id)
-            fields = user["fields"]
-            send_message(sender_id, "شحال تقدر تخيط من سروال نصف الساق في السيمانة؟")
+    elif not fields.get("Téléphone"):
+        phone = event["message"].get("text")
+        valid_phone = analyze_response("هل هذا النص يمثل رقم هاتف جزائري صالح؟", phone)
+        if "نعم" in valid_phone:
+            update_client(client["id"], {"Téléphone": phone})
+            send_message(sender_id, "ممتاز! الآن أعطينا عنوان التوصيل.")
         else:
-            send_message(sender_id, "نعتذرو، لازم تكون عندك خبرة في خياطة السروال ولا السرفات.")
-        return "ok"
+            send_message(sender_id, "الرقم يبدو غير صحيح، من فضلك عاود أرسله.")
 
-    if not fields.get("Capacite_Hebdomadaire"):
-        update_user_field(record_id, "Capacite_Hebdomadaire", message)
-        user = search_user_by_messenger_id(sender_id)
-        fields = user["fields"]
-        send_message(sender_id, "عندك سورجي؟")
-        return "ok"
+    elif not fields.get("Adresse Livraison"):
+        address = event["message"].get("text")
+        update_client(client["id"], {"Adresse Livraison": address})
+        send_message(sender_id, "شكرا! سجلنا الطلب بنجاح وراح نتواصلو معاك قريب.")
 
-    if not fields.get("Surjeteuse"):
-        if any(x in message for x in ["نعم", "واه", "عندي"]):
-            update_user_field(record_id, "Surjeteuse", True)
-        else:
-            update_user_field(record_id, "Surjeteuse", False)
-        user = search_user_by_messenger_id(sender_id)
-        fields = user["fields"]
-        send_message(sender_id, "عندك دورات وسورجي؟")
-        return "ok"
+    new_conversation = conversation + f"\n[{datetime.now()}] {event['message'].get('text', 'صورة تم إرسالها')}"
+    update_client(client["id"], {"Conversation": new_conversation})
 
-    if fields.get("Surjeteuse"):
-        send_message(sender_id, "راهي المعلومات كاملة عندنا. إذا كاين حاجة جديدة ولا تحب تزيد حاجة، قولها.")
-    else:
-        send_message(sender_id, "نكملو وين حبست، عاود جاوب على آخر سؤال من فضلك")
     return "ok"
 
-# ============ تشغيل التطبيق ============
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
