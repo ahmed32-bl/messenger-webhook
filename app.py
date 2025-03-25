@@ -97,7 +97,39 @@ def webhook():
     if not client:
         client = create_client(sender_id)
         if not client:
-            send_message(sender_id, "🙏 وقع مشكل تقني صغير، جر
+            send_message(sender_id, "🙏 وقع مشكل تقني صغير، جرب بعد لحظات")
+            return "ok"
+        else:
+            send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا. أرسل لنا رمز المنتج باش نكملو الطلب.")
+            return "ok"
+
+    record_id = client["id"]
+    fields = client.get("fields", {})
+
+    if not fields.get("Code Produit"):
+        update_client(record_id, {"Code Produit": user_text})
+        send_message(sender_id, "جيد، أعطينا رقم هاتفك باش نتواصلو معاك.")
+        return "ok"
+
+    if not fields.get("Téléphone"):
+        if is_valid_phone(user_text):
+            update_client(record_id, {"Téléphone": user_text})
+            send_message(sender_id, "ممتاز! الآن أعطينا عنوان التوصيل.")
+        else:
+            send_message(sender_id, "الرقم يبدو غير صحيح، من فضلك عاود أرسله.")
+        return "ok"
+
+    if not fields.get("Adresse Livraison"):
+        update_client(record_id, {"Adresse Livraison": user_text})
+        send_message(sender_id, "شكرا! سجلنا الطلب بنجاح وراح نتواصلو معاك قريب.")
+        return "ok"
+
+    return "ok"
+
+# تشغيل التطبيق
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
