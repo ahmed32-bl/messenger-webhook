@@ -59,18 +59,13 @@ def webhook():
 
     if not client:
         client = create_client(sender_id)
-        send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا. ابعثلنا صورة الحذاء مع رمز المنتج.")
+        send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا. أرسل لنا رمز المنتج باش نكملو الطلب.")
         return "ok"
 
     fields = client.get("fields", {})
     conversation = fields.get("Conversation", "")
 
-    if "attachments" in event["message"] and not fields.get("Image Produit"):
-        image_url = event["message"]["attachments"][0]["payload"]["url"]
-        update_client(client["id"], {"Image Produit": image_url})
-        send_message(sender_id, "شكرا! أرسل لنا الآن رمز المنتج المكتوب على الصورة.")
-
-    elif not fields.get("Code Produit"):
+    if not fields.get("Code Produit"):
         code_produit = event["message"].get("text")
         valid_code = analyze_response("هل هذا النص يمثل رمز منتج؟", code_produit)
         if "نعم" in valid_code:
@@ -93,13 +88,14 @@ def webhook():
         update_client(client["id"], {"Adresse Livraison": address})
         send_message(sender_id, "شكرا! سجلنا الطلب بنجاح وراح نتواصلو معاك قريب.")
 
-    new_conversation = conversation + f"\n[{datetime.now()}] {event['message'].get('text', 'صورة تم إرسالها')}"
+    new_conversation = conversation + f"\n[{datetime.now()}] {event['message'].get('text', 'رسالة')}"
     update_client(client["id"], {"Conversation": new_conversation})
 
     return "ok"
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
 
 
