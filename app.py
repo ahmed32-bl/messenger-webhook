@@ -157,4 +157,62 @@ def webhook():
     if not client:
         client = create_client(sender_id)
         if not client:
+            send_message(sender_id, "🔴 وقع مشكل تقني، جرب بعد لحظات.")
+            return "ok"
+        send_message(sender_id, "👟 مرحبا بيك في متجر الأحذية تاعنا! بعتلنا رمز المنتج باش نبدأو.")
+        return "ok"
+
+    record_id = client["id"]
+    fields = client.get("fields", {})
+    log_conversation(record_id, user_text)
+
+    history = fields.get("Conversation", "")
+    infos = get_infos_magasin()
+
+    user_fields = ""
+    for k, v in fields.items():
+        if k in ["Code Produit", "Téléphone", "Adresse Livraison"]:
+            user_fields += f"{k}: {v}\n"
+
+    if not fields.get("Code Produit"):
+        response = gpt_analyze("رمز المنتج", user_text, history, infos, user_fields)
+        if response.startswith("نعم"):
+            update_client(record_id, {"Code Produit": user_text})
+            send_message(sender_id, "✅ سجلنا الرمز، بعتلنا رقم هاتفك.")
+        elif response.startswith("ما فهمتش"):
+            send_message(sender_id, response)
+        else:
+            send_message(sender_id, response + "\nلكن نحتاج رمز المنتج باش نكملو.")
+        return "ok"
+
+    if not fields.get("Téléphone"):
+        response = gpt_analyze("رقم الهاتف", user_text, history, infos, user_fields)
+        if response.startswith("نعم"):
+            update_client(record_id, {"Téléphone": user_text})
+            send_message(sender_id, "📞 تمام! دوك بعتلنا عنوان التوصيل.")
+        elif response.startswith("ما فهمتش"):
+            send_message(sender_id, response)
+        else:
+            send_message(sender_id, response + "\nلكن نحتاج رقم الهاتف باش نكملو.")
+        return "ok"
+
+    if not fields.get("Adresse Livraison"):
+        response = gpt_analyze("العنوان", user_text, history, infos, user_fields)
+        if response.startswith("نعم"):
+            update_client(record_id, {"Adresse Livraison": user_text})
+            send_message(sender_id, "📦 شكراً! سجلنا كلش، وراح نتواصلو معاك قريباً.")
+        elif response.startswith("ما فهمتش"):
+            send_message(sender_id, response)
+        else:
+            send_message(sender_id, response + "\nلكن نحتاج عنوان التوصيل باش نكملو.")
+        return "ok"
+
+    response = gpt_analyze("تم التسجيل", user_text, history, infos, user_fields)
+    send_message(sender_id, response)
+    return "ok"
+
+# -------------------- تشغيل --------------------
+
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
 
