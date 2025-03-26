@@ -2,7 +2,7 @@ import os
 import requests
 import logging
 from flask import Flask, request
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from openai import OpenAI
 
@@ -43,7 +43,6 @@ def create_client(messenger_id):
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
-    # توقيت الجزائر
     alg_time = datetime.now(pytz.timezone("Africa/Algiers")).strftime("%Y-%m-%dT%H:%M:%S")
     data = {
         "fields": {
@@ -79,73 +78,36 @@ def log_conversation(record_id, message):
     new_convo = f"{old_convo}\n[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {message}"
     update_client(record_id, {"Conversation": new_convo})
 
-# -------------------- GPT تحليل --------------------
+# -------------------- GPT الذكاء --------------------
 
-def is_valid_phone(text):
-    try:
-        response = client_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": f"هل هذا رقم هاتف جزائري صالح؟ جاوب بنعم أو لا: {text}"}]
-        )
-        return "نعم" in response.choices[0].message.content
-    except:
-        return False
-
-def is_answer_relevant(step, user_text):
+def gpt_analyze(step, user_text, history, infos):
     try:
         prompt = f"""
-        أنت مساعد افتراضي تسجل معلومات زبون طلب منتج. المرحلة الحالية هي: {step}.
-        الزبون كتب: \"{user_text}\"
-        هل هذا الجواب مناسب لهذه المرحلة؟
+        أنت بوت تابع لمتجر أحذية. هدفك الرئيسي هو تسجيل معلومات الزبائن: رمز المنتج، رقم الهاتف، العنوان.
+        الزبون راه في مرحلة: {step}.
 
-        جاوب فقط بـ \"نعم\" أو \"لا\".
+        🧠 سجل المحادثة السابقة:
+        {history}
+
+        📩 الرسالة الجديدة:
+        "{user_text}"
+
+        📚 معلومات المنتجات:
+        {infos}
+
+        جاوب فقط:
+        - إذا الرسالة تمثل فعلاً {step} قل: نعم
+        - إذا كانت استفسار (مثلاً على السعر أو المقاس)، جاوب عليه بصيغة دارجة
+        - إذا كانت غير مفهومة، قل: ما فهمتش، واش تقصد؟
         """
         response = client_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return "نعم" in response.choices[0].message.content
-    except:
-        return True
-
-def detect_question_type(user_text):
-    try:
-        prompt = f"""
-        أنت مساعد افتراضي تفهم رسائل الزبائن.
-        الرسالة: \"{user_text}\"
-
-        هل هذه الرسالة:
-        1. تحتوي على معلومات مثل رقم أو عنوان أو رمز منتج؟
-        2. أو أنها سؤال عن منتج، سعر، توصيل...؟
-        3. أو أنها غير مفهومة؟
-
-        جاوب فقط بـ:
-        - \"معلومة\"
-        - \"سؤال\"
-        - \"غير واضح\"
-        """
-        response = client_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4",
             messages=[{"role": "user", "content": prompt}]
         )
         return response.choices[0].message.content.strip()
-    except:
-        return "غير واضح"
-
-# -------------------- جدول Infos_Magasin --------------------
-
-def search_in_infos(user_text):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Infos_Magasin"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    response = requests.get(url, headers=headers)
-    records = response.json().get("records", [])
-
-    for record in records:
-        question = record["fields"].get("Question", "").lower()
-        answer = record["fields"].get("Réponse", "")
-        if question in user_text.lower():
-            return answer
-    return None
+    except Exception as e:
+        logging.error(f"GPT error: {e}")
+        return "ما فهمتش، واش تقصد؟"
 
 # -------------------- Webhook --------------------
 
@@ -157,7 +119,7 @@ def webhook():
     user_text = event["message"].get("text", "").strip()
 
     if not user_text:
-        send_message(sender_id, "بعتلنا المعلومات كتابة فقط من فضلك.")
+        send_message(sender_id, "✍️ بعتلنا الكتابة فقط من فضلك.")
         return "ok"
 
     client = search_client(sender_id)
@@ -166,48 +128,51 @@ def webhook():
         if not client:
             send_message(sender_id, "🔴 وقع مشكل تقني، جرب بعد لحظات.")
             return "ok"
-        send_message(sender_id, "مرحبا بيك في متجر الأحذية تاعنا 👟 أرسل رمز المنتج باش نكملو الطلب.")
+        send_message(sender_id, "👟 مرحبا بيك في متجر الأحذية تاعنا! بعتلنا رمز المنتج باش نبدأو.")
         return "ok"
 
     record_id = client["id"]
     fields = client.get("fields", {})
-
     log_conversation(record_id, user_text)
-    kind = detect_question_type(user_text)
 
-    if kind == "سؤال":
-        answer = search_in_infos(user_text)
-        send_message(sender_id, answer or "🔎 خليني نشوف ونجاوبك إن شاء الله.")
-        return "ok"
+    # جمع التاريخ والمعلومات
+    history = fields.get("Conversation", "")
+    infos = "سعر التوصيل: 400 دج، المقاسات: من 39 حتى 45، الدفع عند الاستلام."
 
     if not fields.get("Code Produit"):
-        if is_answer_relevant("رمز المنتج", user_text):
+        response = gpt_analyze("رمز المنتج", user_text, history, infos)
+        if response.startswith("نعم"):
             update_client(record_id, {"Code Produit": user_text})
-            send_message(sender_id, "جيد ✅ أرسل رقم هاتفك باش نتواصلو معاك.")
+            send_message(sender_id, "✅ سجلنا الرمز، بعتلنا رقم هاتفك.")
+        elif response.startswith("ما فهمتش"):
+            send_message(sender_id, response)
         else:
-            send_message(sender_id, "📌 نحتاج رمز المنتج لي راه على الصورة (مثلاً: 1123). بعتلي الرمز باش نكملو.")
+            send_message(sender_id, response + "\nلكن نحتاج رمز المنتج باش نكملو.")
         return "ok"
 
     if not fields.get("Téléphone"):
-        if is_answer_relevant("رقم الهاتف", user_text):
-            if is_valid_phone(user_text):
-                update_client(record_id, {"Téléphone": user_text})
-                send_message(sender_id, "ممتاز 👍 الآن أرسل عنوان التوصيل.")
-            else:
-                send_message(sender_id, "❌ الرقم غير صحيح. حاول تبعت رقم جزائري يبدأ بـ 05 أو 06 أو 07.")
+        response = gpt_analyze("رقم الهاتف", user_text, history, infos)
+        if response.startswith("نعم"):
+            update_client(record_id, {"Téléphone": user_text})
+            send_message(sender_id, "📞 تمام! دوك بعتلنا عنوان التوصيل.")
+        elif response.startswith("ما فهمتش"):
+            send_message(sender_id, response)
         else:
-            send_message(sender_id, "👀 راني نستنى رقم الهاتف، بعتلي رقم باش نكملو.")
+            send_message(sender_id, response + "\nلكن نحتاج رقم الهاتف باش نكملو.")
         return "ok"
 
     if not fields.get("Adresse Livraison"):
-        if is_answer_relevant("عنوان التوصيل", user_text):
+        response = gpt_analyze("العنوان", user_text, history, infos)
+        if response.startswith("نعم"):
             update_client(record_id, {"Adresse Livraison": user_text})
-            send_message(sender_id, "📦 شكرا! سجلنا الطلب وسنتواصل معاك قريبًا إن شاء الله.")
+            send_message(sender_id, "📦 شكراً! سجلنا كلش، وراح نتواصلو معاك قريباً.")
+        elif response.startswith("ما فهمتش"):
+            send_message(sender_id, response)
         else:
-            send_message(sender_id, "📍 أرسل العنوان الكامل (المدينة + الحي)، باش نوصلولك الطلب.")
+            send_message(sender_id, response + "\nلكن نحتاج عنوان التوصيل باش نكملو.")
         return "ok"
 
-    send_message(sender_id, "✅ إذا تحب تستفسر على شي آخر، راني هنا.")
+    send_message(sender_id, "✅ إذا تحب تسقسي على حاجة، راني هنا.")
     return "ok"
 
 # -------------------- تشغيل --------------------
