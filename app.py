@@ -78,6 +78,21 @@ def log_conversation(record_id, message):
     new_convo = f"{old_convo}\n[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {message}"
     update_client(record_id, {"Conversation": new_convo})
 
+# -------------------- قراءة جدول Infos_Magasin --------------------
+
+def get_infos_magasin():
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/Infos_Magasin"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    response = requests.get(url, headers=headers)
+    data = response.json().get("records", [])
+
+    infos_text = ""
+    for record in data:
+        fields = record.get("fields", {})
+        for key, value in fields.items():
+            infos_text += f"{key}: {value}\n"
+    return infos_text.strip()
+
 # -------------------- GPT الذكاء --------------------
 
 def gpt_analyze(step, user_text, history, infos):
@@ -92,7 +107,7 @@ def gpt_analyze(step, user_text, history, infos):
         📩 الرسالة الجديدة:
         "{user_text}"
 
-        📚 معلومات المنتجات:
+        📚 معلومات من المتجر:
         {infos}
 
         جاوب فقط:
@@ -135,9 +150,9 @@ def webhook():
     fields = client.get("fields", {})
     log_conversation(record_id, user_text)
 
-    # جمع التاريخ والمعلومات
+    # تحديث: قراءة حقيقية من جدول Infos_Magasin
     history = fields.get("Conversation", "")
-    infos = "سعر التوصيل: 400 دج، المقاسات: من 39 حتى 45، الدفع عند الاستلام."
+    infos = get_infos_magasin()
 
     if not fields.get("Code Produit"):
         response = gpt_analyze("رمز المنتج", user_text, history, infos)
@@ -179,3 +194,4 @@ def webhook():
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
