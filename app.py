@@ -22,7 +22,7 @@ def send_message(sender_id, text):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
         "recipient": {"id": sender_id},
-        "message": {"text": text}
+        "message": {"text": "\u200F" + text}  
     }
     requests.post(url, json=payload)
 
