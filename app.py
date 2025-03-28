@@ -22,7 +22,7 @@ def send_message(sender_id, text):
     url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
     payload = {
         "recipient": {"id": sender_id},
-        "message": {"text": "\u200F" + text}  
+        "message": {"text": "\u200F" + text}
     }
     requests.post(url, json=payload)
 
@@ -221,8 +221,30 @@ def webhook():
     send_message(sender_id, response)
     return "ok"
 
+
+# -------------------- التحقق من Facebook Webhook --------------------
+
+@app.route("/webhook", methods=["GET"])
+def verify():
+    verify_token = "warcha123"  # لازم يكون نفس اللي تدخله في إعدادات Facebook
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == verify_token:
+        return challenge, 200
+    return "Verification token mismatch", 403
+
+# -------------------- الصفحة الرئيسية (اختياري) --------------------
+
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ Webhook is running!"
+
+
 # -------------------- تشغيل --------------------
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 
